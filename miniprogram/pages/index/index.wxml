@@ -1,0 +1,38 @@
+<view class="container">
+  <view class="title">Tablut · 塔布卢棋</view>
+
+  <view class="status">
+    <text wx:if="{{isThinking}}" class="thinking">AI 思考中…</text>
+    <text wx:elif="{{isGameOver}}" class="status-text">对局结束</text>
+    <text wx:else class="status-text">{{currentTurnLabel}}</text>
+  </view>
+
+  <view class="board">
+    <view
+      wx:for="{{cells}}"
+      wx:key="index"
+      class="cell {{item.isThrone ? 'cell-throne' : ''}} {{item.isStronghold ? 'cell-stronghold' : ''}}"
+      data-r="{{item.r}}"
+      data-c="{{item.c}}"
+      bindtap="onCellTap"
+    >
+      <view
+        wx:if="{{item.piece !== 0}}"
+        class="piece {{item.cls}} {{item.selected ? 'piece-selected' : ''}}"
+      ></view>
+    </view>
+  </view>
+
+  <view class="controls">
+    <button class="btn" size="mini" data-mode="1" bindtap="onChangeMode">我执黑（先手）</button>
+    <button class="btn" size="mini" data-mode="2" bindtap="onChangeMode">我执白（后手）</button>
+    <button class="btn" size="mini" bindtap="onRestartTap">重新开始</button>
+  </view>
+
+  <view wx:if="{{isGameOver}}" class="overlay">
+    <view class="overlay-box">
+      <view class="overlay-title">{{winnerText}}</view>
+      <button class="btn btn-primary" bindtap="onRestartTap">再来一局</button>
+    </view>
+  </view>
+</view>

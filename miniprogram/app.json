@@ -1,0 +1,12 @@
+{
+  "pages": [
+    "pages/index/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "Tablut · 塔布卢棋",
+    "navigationBarBackgroundColor": "#2b2b2b",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#2b2b2b"
+  },
+  "sitemapLocation": "sitemap.json"
+}
