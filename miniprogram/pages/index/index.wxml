@@ -1,5 +1,11 @@
 <view class="container">
-  <view class="title">Tablut · 塔布卢棋</view>
+  <view class="header">
+    <view class="title">Tablut · 塔布卢棋</view>
+    <view class="header-btns">
+      <view class="rules-btn" bindtap="onShowLog">日志</view>
+      <view class="rules-btn" bindtap="onShowRules">规则</view>
+    </view>
+  </view>
 
   <view class="status">
     <text wx:if="{{isThinking}}" class="thinking">AI 思考中…</text>
@@ -23,16 +29,49 @@
     </view>
   </view>
 
-  <view class="controls">
-    <button class="btn" size="mini" data-mode="1" bindtap="onChangeMode">我执黑（先手）</button>
-    <button class="btn" size="mini" data-mode="2" bindtap="onChangeMode">我执白（后手）</button>
-    <button class="btn" size="mini" bindtap="onRestartTap">重新开始</button>
+  <view class="footer">
+    <view class="mode-toggle">
+      <view
+        class="mode-option {{gameMode === 1 ? 'mode-active' : ''}}"
+        data-mode="1"
+        bindtap="onChangeMode"
+      >执黑</view>
+      <view
+        class="mode-option {{gameMode === 2 ? 'mode-active' : ''}}"
+        data-mode="2"
+        bindtap="onChangeMode"
+      >执白</view>
+    </view>
+    <view class="restart-btn" bindtap="onRestartTap">重新开始</view>
   </view>
 
   <view wx:if="{{isGameOver}}" class="overlay">
     <view class="overlay-box">
       <view class="overlay-title">{{winnerText}}</view>
       <button class="btn btn-primary" bindtap="onRestartTap">再来一局</button>
+    </view>
+  </view>
+
+  <view wx:if="{{showRules}}" class="overlay" bindtap="onHideRules">
+    <view class="rules-box" catchtap="onNoop">
+      <view class="rules-title">规则</view>
+      <view class="rules-list">
+        <view wx:for="{{rules}}" wx:key="*this" class="rules-item">{{item}}</view>
+      </view>
+      <view class="rules-close" bindtap="onHideRules">知道了</view>
+    </view>
+  </view>
+
+  <view wx:if="{{showLog}}" class="overlay" bindtap="onHideLog">
+    <view class="rules-box log-box" catchtap="onNoop">
+      <view class="rules-title">行棋记录</view>
+      <scroll-view scroll-y class="log-list">
+        <text class="log-text">{{logText}}</text>
+      </scroll-view>
+      <view class="log-actions">
+        <view class="rules-close log-btn" bindtap="onCopyLog">复制日志</view>
+        <view class="rules-close log-btn" bindtap="onHideLog">关闭</view>
+      </view>
     </view>
   </view>
 </view>

@@ -74,9 +74,20 @@ function checkSide(type, currentTurn) {
   return type === PieceType.Defender || type === PieceType.King;
 }
 
+// 判断某棋子能否停在目标格（王座规则）
+// 规则：只有国王能停王座，且国王一旦离开王座就不能再回来
+function canLandOnThrone(board, mover, tr, tc) {
+  if (!isThrone(tr, tc)) return true;
+  if (mover !== PieceType.King) return false; // 士兵不能停王座
+  // 国王仍在王座上（即尚未离开）才允许；已离开则不能回
+  return board[THRONE.r][THRONE.c] === PieceType.King;
+}
+
 // 车走直线，中间不能有子
 function isValidMove(board, fr, fc, tr, tc) {
   if (fr !== tr && fc !== tc) return false;
+  const mover = board[fr][fc];
+  if (!canLandOnThrone(board, mover, tr, tc)) return false;
   const dr = Math.sign(tr - fr);
   const dc = Math.sign(tc - fc);
   let cr = fr + dr;
@@ -156,6 +167,7 @@ module.exports = {
   isFriend,
   checkSide,
   isValidMove,
+  canLandOnThrone,
   checkCaptures,
   isKingCaptured,
   checkWinCondition,
