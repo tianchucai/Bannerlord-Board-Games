@@ -81,26 +81,25 @@ function body(ac, t0, freq, vol, dur) {
   osc.stop(t0 + dur + 0.03);
 }
 
-// 落子：单次木面敲击 + 木质共振（"嗒"）
+// 落子：单次木面敲击 + 木质共振（更闷：低频带通、衰减稍长）
 function playMove() {
   const ac = ensureCtx();
   if (!ac) return;
   try {
     const t0 = ac.currentTime;
-    knock(ac, t0, 0.34, 2300, 0.10, 0.9);
-    body(ac, t0, 190, 0.22, 0.11);
+    knock(ac, t0, 0.34, 1600, 0.13, 0.7);
+    body(ac, t0, 160, 0.24, 0.13);
   } catch (e) {}
 }
 
-// 吃子：双响敲击（更脆更急促）+ 共振
+// 吃子：单响高频短敲击（更脆，无双响）
 function playCapture() {
   const ac = ensureCtx();
   if (!ac) return;
   try {
     const t0 = ac.currentTime;
-    knock(ac, t0, 0.30, 2600, 0.07, 1.0);
-    knock(ac, t0 + 0.04, 0.26, 1900, 0.08, 1.1);
-    body(ac, t0, 160, 0.24, 0.12);
+    knock(ac, t0, 0.32, 3400, 0.05, 1.5);
+    body(ac, t0, 170, 0.18, 0.07);
   } catch (e) {}
 }
 
