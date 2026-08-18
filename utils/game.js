@@ -1,5 +1,4 @@
 // Tablut 游戏核心逻辑（纯数据，不依赖任何渲染层）
-// 从 assets/BoardManager.ts 移植
 
 const PieceType = {
   None: 0,
@@ -94,10 +93,33 @@ function isValidMove(board, fr, fc, tr, tc) {
   let cc = fc + dc;
   while (cr !== tr || cc !== tc) {
     if (board[cr][cc] !== PieceType.None) return false;
+    if (isThrone(cr, cc)) return false; // 王座是障碍，任何棋子都不能穿过
     cr += dr;
     cc += dc;
   }
   return true;
+}
+
+// 枚举某棋子的所有合法落点（用于高亮可走格子）
+function getPieceMoves(board, r, c) {
+  const moves = [];
+  const mover = board[r][c];
+  if (mover === PieceType.None) return moves;
+  const dirs = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+  for (const d of dirs) {
+    let nr = r + d[0];
+    let nc = c + d[1];
+    while (nr >= 0 && nr < SIZE && nc >= 0 && nc < SIZE) {
+      if (board[nr][nc] !== PieceType.None) break;
+      if (isThrone(nr, nc)) break; // 王座是障碍
+      if (canLandOnThrone(board, mover, nr, nc)) {
+        moves.push({ r: nr, c: nc });
+      }
+      nr += d[0];
+      nc += d[1];
+    }
+  }
+  return moves;
 }
 
 // 走棋后检查吃子，就地修改 board，返回被吃掉的棋子列表
@@ -168,6 +190,7 @@ module.exports = {
   checkSide,
   isValidMove,
   canLandOnThrone,
+  getPieceMoves,
   checkCaptures,
   isKingCaptured,
   checkWinCondition,

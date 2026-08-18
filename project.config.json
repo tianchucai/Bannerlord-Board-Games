@@ -1,5 +1,5 @@
 {
-  "description": "Tablut 塔布卢棋小程序",
+  "description": "骑砍二酒馆棋类小游戏（帝国板棋）",
   "packOptions": {
     "ignore": [],
     "include": []
@@ -31,12 +31,12 @@
     "swc": false,
     "disableSWC": true
   },
-  "compileType": "miniprogram",
+  "compileType": "game",
   "libVersion": "3.8.8",
-  "appid": "wxe6611386b7335e93",
+  "appid": "wx2e04bff5ea1a86eb",
   "projectname": "Tablut_demo",
-  "miniprogramRoot": "miniprogram/",
   "condition": {},
   "simulatorPluginLibVersion": {},
-  "editorSetting": {}
+  "editorSetting": {},
+  "isGameTourist": false
 }
