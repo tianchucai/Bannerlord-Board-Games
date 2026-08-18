@@ -3,6 +3,7 @@
 
 const game = require('./utils/game');
 const ai = require('./utils/ai');
+const sound = require('./utils/sound');
 
 const PieceType = game.PieceType;
 const SIZE = game.SIZE;
@@ -148,6 +149,7 @@ function startGame() {
   game.setupFormation(board);
   currentTurn = PieceType.Attacker;
   selected = null;
+  movableCells = []; // 清掉选中棋子的可走格标注，防止重开后残留
   moveLog = [];
   moveCount = 0;
   isGameOver = false;
@@ -203,6 +205,10 @@ function movePiece(fromR, fromC, toR, toC) {
 
   const captured = game.checkCaptures(board, toR, toC);
 
+  // 音效：吃子用更脆的"啪"，普通落子用"嗒"
+  if (captured.length > 0) sound.playCapture();
+  else sound.playMove();
+
   moveCount += 1;
   let line = moveCount + '. ' + sideName(type) + '[' + mover + '] ' +
     pos(fromR, fromC) + ' → ' + pos(toR, toC);
@@ -218,7 +224,7 @@ function movePiece(fromR, fromC, toR, toC) {
     } else if (game.checkWinCondition(board, toR, toC) === 'white') {
       showGameOver('白方胜利！');
     } else if (moveCount >= 200) {
-      showGameOver('平局（步数上限）');
+      showGameOver('平局（步数上限）', true);
     } else {
       switchTurn();
     }
@@ -226,11 +232,12 @@ function movePiece(fromR, fromC, toR, toC) {
   });
 }
 
-function showGameOver(msg) {
+function showGameOver(msg, isDraw) {
   isGameOver = true;
   winnerText = msg;
   selected = null;
   isThinking = false;
+  if (!isDraw) sound.playWin();
   logLine('===== 对局结束：' + msg + ' =====');
 }
 
@@ -814,6 +821,7 @@ function handleTap(x, y) {
 }
 
 wx.onTouchStart(function (e) {
+  sound.unlock(); // 首次触摸解锁音频（iOS 等平台要求手势后才能发声）
   const t = e.touches[0];
   if (!t) return;
   let x = t.clientX;
