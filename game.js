@@ -4,6 +4,11 @@
 const game = require('./utils/game');
 const ai = require('./utils/ai');
 const sound = require('./utils/sound');
+const wsmod = require('./utils/wolf_sheep');
+const seega = require('./utils/seega');
+const mutorere = require('./utils/mutorere');
+const konane = require('./utils/konane');
+const puluc = require('./utils/puluc');
 
 const PieceType = game.PieceType;
 const SIZE = game.SIZE;
@@ -53,6 +58,23 @@ const BTN_H = 42;
 const BTN_GAP = 10;
 const BTN_AREA_H = BTN_H * 3 + BTN_GAP * 2 + 18;
 
+// ---------- 主菜单：骑砍二酒馆六种棋局 ----------
+const GAMES = [
+  { id: 1, name: '古典象棋', origin: '萨米板棋' },
+  { id: 2, name: '狼羊棋', origin: '尼泊尔虎棋' },
+  { id: 3, name: '施嘉', origin: '埃及夹棋' },
+  { id: 4, name: '舞棋', origin: '毛利星盘棋' },
+  { id: 5, name: '跳棋', origin: '夏威夷跳棋' },
+  { id: 6, name: '普鲁克', origin: '玛雅折返戏' }
+];
+GAMES.forEach(g => { g.full = g.name + '（' + g.origin + '）'; });
+
+// ---------- 主菜单状态 ----------
+let showMenu = true;       // 主菜单显示状态
+let menuTip = '';          // 菜单底部提示文字
+let menuTipTimer = null;   // 提示定时器
+let menuButtons = [];      // 主菜单按钮 { gameId, x, y, w, h }
+
 const layout = {};
 function computeLayout() {
   const avail = H - SAFE_TOP - TITLE_H - STATUS_H - BTN_AREA_H - 24;
@@ -65,6 +87,53 @@ function computeLayout() {
   layout.btnY3 = layout.btnY2 + BTN_H + BTN_GAP;
 }
 computeLayout();
+computeMenuLayout();
+
+// 狼羊棋布局：5×5 点阵棋盘（点间距 cell，5 点 4 段）
+function computeWsLayout() {
+  const availH = H - SAFE_TOP - TITLE_H - STATUS_H - BTN_AREA_H - 30;
+  const cell = Math.floor(Math.min((W - 60) / 4, availH / 4));
+  wsLayout.cell = cell;
+  wsLayout.bx = (W - cell * 4) / 2;
+  wsLayout.by = SAFE_TOP + TITLE_H + STATUS_H + 10;
+}
+
+// 狼羊棋底部按钮：执狼/执羊 toggle + 重新开始 + 规则
+function buildWsButtons() {
+  const margin = 16;
+  const gap = 10;
+  const usableW = W - margin * 2;
+  const toggleW = Math.min(220, usableW);
+  const row2W = (usableW - gap) / 2;
+  const y1 = wsLayout.by + wsLayout.cell * 4 + 16;
+  const y2 = y1 + BTN_H + gap;
+  wsButtons = [
+    { id: 'ws-toggle', x: (W - toggleW) / 2, y: y1, w: toggleW, h: BTN_H },
+    { id: 'ws-restart', text: '重新开始', x: margin, y: y2, w: row2W, h: BTN_H },
+    { id: 'ws-rules', text: '规则', x: margin + row2W + gap, y: y2, w: row2W, h: BTN_H }
+  ];
+}
+
+// 主菜单按钮布局：两列三行
+function computeMenuLayout() {
+  const margin = 24;
+  const gap = 14;
+  const btnW = (W - margin * 2 - gap) / 2;
+  const btnH = 58;
+  const rowGap = 16;
+  const startY = SAFE_TOP + 170;
+  menuButtons = GAMES.map((g, i) => {
+    const row = Math.floor(i / 2);
+    const col = i % 2;
+    return {
+      gameId: g.id,
+      x: margin + col * (btnW + gap),
+      y: startY + row * (btnH + rowGap),
+      w: btnW,
+      h: btnH
+    };
+  });
+}
 
 // ---------- 固定按钮 ----------
 function buildButtons() {
@@ -112,6 +181,74 @@ let movableCells = []; // 当前选中棋子的可走格子
 
 const LOG_KEY = 'tablut_last_log';
 
+// ---------- 狼羊棋状态（Bagh-Chal）----------
+let wsActive = false;    // 狼羊棋页面激活
+let ws = null;           // 对局状态 { board, turn, phase, placed, captured }
+let wsSide = 2;          // 1=玩家执狼, 2=玩家执羊
+let wsSelected = null;   // 选中的点 { r, c }
+let wsMoves = [];        // 当前选中棋子的合法目标
+let wsGameOver = false;
+let wsWinner = '';
+let wsThinking = false;
+let wsMoveCount = 0;
+let wsShowRules = false;
+let wsModalButtons = []; // 狼羊棋弹窗按钮
+let wsLayout = { bx: 0, by: 0, cell: 60 };
+let wsButtons = [];      // 狼羊棋底部按钮
+
+const WS_RULES = [
+  '狼羊棋（尼泊尔虎棋 Bagh-Chal）：5×5 棋盘，狼(虎) 4 只 vs 羊 20 只。',
+  '羊先手：先把 20 只羊逐一放到棋盘空点上，放完后改为走棋（沿连线走一格）。',
+  '狼每回合走一格到相邻空点；或跳过相邻的羊到正后方空点，吃掉被跳的羊（可斜跳）。',
+  '狼获胜：吃掉 5 只羊。',
+  '羊获胜：困住 4 只狼，使狼无法走格也无法跳吃。'
+];
+
+// ---------- 四款新棋（施嘉/舞棋/跳棋/普鲁克）通用状态 ----------
+const GG_MODS = {
+  seega: { name: '施嘉', mod: seega, rules: [
+    '施嘉（Seega 埃及夹棋）：5×5 棋盘，中央十字（中心+上下左右）开局为空且禁止放置。',
+    '双方各 12 子，先轮流把子放到非中央十字的空位，放完 12 子后改为移动（水平/垂直一格）。',
+    '移动后，凡被己方水平或垂直夹住的敌子全部被吃；中央十字格上的棋子受保护不可被吃。',
+    '吃光对方全部棋子，或对方无合法移动者获胜。'
+  ]},
+  mutorere: { name: '舞棋', mod: mutorere, rules: [
+    '舞棋（Mū tōrere 毛利星盘棋）：8 个外围点环形 + 1 个中心点。',
+    '双方各 4 子，开局交替占据外围 8 点，中心空。',
+    '外围子可移到相邻外围空点，或移入中心（空时）。',
+    '中心子只能移到「两侧外围点都被占据」的外围空点。',
+    '无吃子；轮到某方无合法移动即败。'
+  ]},
+  konane: { name: '跳棋', mod: konane, rules: [
+    '跳棋（Kōnane 夏威夷跳棋）：8×8 棋盘，开局黑白交替填满。',
+    '开局黑方移除中心一子，白方再移除相邻一子，然后黑方先跳。',
+    '只能跳跃吃子：跳过相邻的敌子到正后方空位（四方向），可连续跳且必须跳到不能再跳。',
+    '轮到某方无合法跳即败。'
+  ]},
+  puluc: { name: '普鲁克', mod: puluc, rules: [
+    '普鲁克（Puluc 玛雅折返戏）：一条 5 格道路，双方各 5 枚棋子从两端出发。',
+    '掷 4 根两面木棍决定步数（0-4），选一枚棋子：从"家"进场，或已在路上的棋子前进。',
+    '到达远端格 4 后掉头折返，返回途中回到格 0 即离场。',
+    '落点格若有敌子，敌子最上面一枚被捕获送回其"家"。',
+    '先让全部 5 枚棋子离场的一方获胜。'
+  ]}
+};
+
+let gActive = null;   // 'seega'|'mutorere'|'konane'|'puluc'
+let gState = null;    // 当前游戏状态（模块格式）
+let gTurn = null;     // 当前行动方
+let gSide = 1;        // 玩家执 1(黑/先手) 或 2(白/后手)
+let gSel = null;      // 选中
+let gMoves = [];      // 候选走法
+let gOver = false;
+let gWinner = '';
+let gThink = false;
+let gCount = 0;
+let gShowRules = false;
+let gModal = [];
+let gPulucRoll = -1;  // 普鲁克当前掷出的步数（-1 待掷）
+let gLayout = { bx: 0, by: 0, cell: 40, r: 120, cx: 0, cy: 0, road: 44 };
+
 const RULES = [
   '黑方 16 枚进攻子，白方 8 枚防御子加 1 枚国王。',
   '所有棋子沿直线移动，不可跳过其它棋子。',
@@ -145,6 +282,7 @@ function logLine(text) {
 }
 
 function startGame() {
+  showMenu = false; // 从主菜单进入对局
   board = game.createEmptyBoard();
   game.setupFormation(board);
   currentTurn = PieceType.Attacker;
@@ -162,6 +300,21 @@ function startGame() {
   const modeLabel = gameMode === 1 ? '玩家执黑' : (gameMode === 2 ? '玩家执白' : 'AI 对战');
   logLine('===== 新对局开始（' + modeLabel + '）=====');
   checkAiTurn();
+  draw();
+}
+
+// 返回主菜单
+function backToMenu() {
+  showMenu = true;
+  wsActive = false;
+  gActive = null;
+  isThinking = false;
+  wsThinking = false;
+  gThink = false;
+  selected = null;
+  movableCells = [];
+  anim = null;
+  if (animFrame != null) { cancelAnimationFrame(animFrame); animFrame = null; }
   draw();
 }
 
@@ -186,6 +339,7 @@ function checkAiTurn() {
 }
 
 function executeAiMove() {
+  if (showMenu || isGameOver) return; // 已返回菜单/对局结束则忽略残留定时器
   const bestMove = ai.getBestMove(board, currentTurn);
   if (bestMove) {
     movePiece(bestMove.from.r, bestMove.from.c, bestMove.to.r, bestMove.to.c);
@@ -293,6 +447,427 @@ function changeDifficulty(d) {
   difficulty = d;
   ai.maxDepth = DIFF_DEPTH[d]; // 三档对应搜索深度 1/2/3
   startGame();
+}
+
+// ================= 狼羊棋 =================
+
+// 从主菜单进入狼羊棋
+function enterWolfSheep() {
+  wsActive = true;
+  showMenu = false;
+  startWsGame();
+}
+
+// 开新一局（保留执狼/执羊设置）
+function startWsGame() {
+  ws = {
+    board: wsmod.setup(),
+    turn: wsmod.PIECE.Sheep, // 羊先手
+    phase: 'place',           // 'place' 放置阶段 / 'move' 移动阶段
+    placed: 0,
+    captured: 0
+  };
+  wsSelected = null;
+  wsMoves = [];
+  wsGameOver = false;
+  wsWinner = '';
+  wsThinking = false;
+  wsMoveCount = 0;
+  wsShowRules = false;
+  checkWsAiTurn();
+  draw();
+}
+
+// 回合切换 + AI 触发
+function switchWsTurn() {
+  ws.turn = (ws.turn === wsmod.PIECE.Wolf) ? wsmod.PIECE.Sheep : wsmod.PIECE.Wolf;
+  // 羊放满 20 只后自动从放置转入移动
+  if (ws.turn === wsmod.PIECE.Sheep && ws.phase === 'place' && ws.placed >= wsmod.SHEEP_TOTAL) {
+    ws.phase = 'move';
+  }
+  checkWsAiTurn();
+}
+
+function checkWsAiTurn() {
+  if (wsGameOver || !ws) return;
+  let isAi = false;
+  if (wsSide === 1 && ws.turn === wsmod.PIECE.Sheep) isAi = true; // 玩家执狼，AI 执羊
+  if (wsSide === 2 && ws.turn === wsmod.PIECE.Wolf) isAi = true;  // 玩家执羊，AI 执狼
+  if (isAi) {
+    wsThinking = true;
+    draw();
+    setTimeout(() => executeWsAiMove(), 350);
+  } else {
+    wsThinking = false;
+  }
+}
+
+function executeWsAiMove() {
+  if (!ws || wsGameOver || showMenu || !wsActive) return;
+  let move = null;
+  if (ws.turn === wsmod.PIECE.Wolf) move = wsmod.wolfAiMove(ws.board);
+  else move = wsmod.sheepAiMove(ws.board, ws.placed);
+  if (move) {
+    applyWsMove(move);
+  } else {
+    // 无棋可走：对方胜
+    wsGameOver = true;
+    wsWinner = (ws.turn === wsmod.PIECE.Wolf) ? '羊方胜利！' : '狼方胜利！';
+    sound.playWin();
+    draw();
+  }
+}
+
+function applyWsMove(move) {
+  const res = wsmod.applyMove(ws.board, move);
+  ws.board = res.board;
+  if (move.place) ws.placed++;
+  ws.captured += res.captured;
+  wsMoveCount++;
+  wsSelected = null;
+  wsMoves = [];
+
+  // 音效：跳吃更脆，其余落子/放子用"嗒"
+  if (res.captured > 0) sound.playCapture();
+  else sound.playMove();
+
+  const win = wsmod.checkWin(ws.board, ws.captured);
+  if (win === 'wolf') {
+    wsGameOver = true; wsWinner = '狼方胜利！'; sound.playWin();
+  } else if (win === 'sheep') {
+    wsGameOver = true; wsWinner = '羊方胜利！'; sound.playWin();
+  } else if (wsMoveCount >= wsmod.MAX_MOVES) {
+    wsGameOver = true; wsWinner = '平局（步数上限）';
+  } else {
+    switchWsTurn();
+  }
+  draw();
+}
+
+// 玩家触摸狼羊棋棋盘（r, c 为 0..4 点阵坐标）
+function onWsTap(r, c) {
+  if (wsGameOver || wsThinking || !ws) return;
+  const isWolfTurn = ws.turn === wsmod.PIECE.Wolf;
+  const playerWolf = wsSide === 1;
+
+  // 玩家执狼回合：选狼 → 走格/跳吃
+  if (isWolfTurn && playerWolf) {
+    if (!wsSelected) {
+      if (ws.board[r][c] === wsmod.PIECE.Wolf) {
+        wsSelected = { r, c };
+        wsMoves = wsmod.wolfMoves(ws.board).filter(m => m.from.r === r && m.from.c === c);
+      }
+    } else if (r === wsSelected.r && c === wsSelected.c) {
+      wsSelected = null; wsMoves = [];
+    } else if (ws.board[r][c] === wsmod.PIECE.Wolf) {
+      wsSelected = { r, c };
+      wsMoves = wsmod.wolfMoves(ws.board).filter(m => m.from.r === r && m.from.c === c);
+    } else {
+      const mv = wsMoves.find(m => m.to.r === r && m.to.c === c);
+      if (mv) applyWsMove(mv);
+      else { wsSelected = null; wsMoves = []; }
+    }
+    draw();
+    return;
+  }
+
+  // 玩家执羊回合
+  if (!isWolfTurn && !playerWolf) {
+    // 放置阶段：点空点放羊
+    if (ws.phase === 'place') {
+      if (ws.board[r][c] === wsmod.PIECE.None) {
+        applyWsMove({ place: { r, c } });
+      }
+      draw();
+      return;
+    }
+    // 移动阶段：选羊 → 走一格
+    if (!wsSelected) {
+      if (ws.board[r][c] === wsmod.PIECE.Sheep) {
+        wsSelected = { r, c };
+        wsMoves = wsmod.sheepMoves(ws.board).filter(m => m.from.r === r && m.from.c === c);
+      }
+    } else if (r === wsSelected.r && c === wsSelected.c) {
+      wsSelected = null; wsMoves = [];
+    } else if (ws.board[r][c] === wsmod.PIECE.Sheep) {
+      wsSelected = { r, c };
+      wsMoves = wsmod.sheepMoves(ws.board).filter(m => m.from.r === r && m.from.c === c);
+    } else {
+      const mv = wsMoves.find(m => m.to.r === r && m.to.c === c);
+      if (mv) applyWsMove(mv);
+      else { wsSelected = null; wsMoves = []; }
+    }
+    draw();
+    return;
+  }
+}
+
+// ================= 四款新棋通用页 =================
+
+// 布局：各游戏棋盘参数
+function computeGgLayout() {
+  const availH = H - SAFE_TOP - TITLE_H - STATUS_H - BTN_AREA_H - 30;
+  const size = Math.max(180, Math.min(W - 60, availH));
+  gLayout.size = size;
+  gLayout.bx = (W - size) / 2;
+  gLayout.by = SAFE_TOP + TITLE_H + STATUS_H + 10;
+  gLayout.cell = size / 8; // 8×8（跳棋）用满；5×5（施嘉）和路（普鲁克）按需缩放
+  gLayout.cx = W / 2;
+  gLayout.cy = gLayout.by + size / 2;
+  gLayout.r = size / 2 - 10; // 舞棋星盘半径
+  gLayout.road = Math.min(64, (W - 80) / 5);
+}
+
+// 进入某款棋（id: 3-6 对应 GAMES）
+function enterGG(id) {
+  gActive = id;
+  showMenu = false;
+  startGG();
+}
+
+// 开新一局
+function startGG() {
+  const mod = GG_MODS[gActive].mod;
+  if (gActive === 'seega') {
+    gState = { board: seega.setup(), phase: 'place', placed: { 1: 0, 2: 0 } };
+    gTurn = seega.PIECE.Black;
+  } else if (gActive === 'mutorere') {
+    gState = mutorere.setup();
+    gTurn = mutorere.PIECE.Black;
+  } else if (gActive === 'konane') {
+    gState = konane.setup();
+    gTurn = konane.PIECE.Black;
+  } else if (gActive === 'puluc') {
+    gState = puluc.createState();
+    gTurn = puluc.PIECE.Black;
+    gPulucRoll = puluc.roll(); // 自动掷骰
+    gPulucPhase = 'move';
+  }
+  gSel = null;
+  gMoves = [];
+  if (gActive === 'puluc') gMoves = puluc.moves(gState, gTurn, gPulucRoll);
+  gOver = false;
+  gWinner = '';
+  gThink = false;
+  gCount = 0;
+  gShowRules = false;
+  ggCheckAi();
+  draw();
+}
+
+// 各游戏 AI 走法
+function ggAiMove() {
+  if (gActive === 'seega') return seega.aiMove(gState.board, gTurn, gState.phase);
+  if (gActive === 'mutorere') return mutorere.aiMove(gState, gTurn);
+  if (gActive === 'konane') return konane.aiMove(gState, gTurn);
+  if (gActive === 'puluc') {
+    if (gPulucRoll < 0) gPulucRoll = puluc.roll();
+    return puluc.aiMove(gState, gTurn, gPulucRoll);
+  }
+  return null;
+}
+
+// 胜负判定
+function ggCheckWin() {
+  if (gActive === 'seega') return seega.checkWin(gState.board, gTurn, gState.phase);
+  if (gActive === 'mutorere') return mutorere.checkWin(gState, gTurn);
+  if (gActive === 'konane') return konane.checkWin(gState, gTurn);
+  if (gActive === 'puluc') return puluc.checkWin(gState);
+  return null;
+}
+
+// 应用走法（返回 { captured }）
+function ggApply(move) {
+  let captured = 0;
+  if (gActive === 'seega') {
+    const res = seega.applyMove(gState.board, move, gTurn);
+    gState.board = res.board;
+    captured = res.captured;
+    if (move.place) gState.placed[gTurn]++;
+    if (gState.placed[1] >= 12 && gState.placed[2] >= 12) gState.phase = 'move';
+  } else if (gActive === 'mutorere') {
+    gState = mutorere.applyMove(gState, move);
+  } else if (gActive === 'konane') {
+    gState = konane.applyMove(gState, move);
+    captured = move.captures;
+  } else if (gActive === 'puluc') {
+    const res = puluc.applyMove(gState, move, gTurn, gPulucRoll);
+    gState = res.state;
+    captured = res.captured;
+    gPulucRoll = -1;
+    gPulucPhase = 'roll';
+  }
+  gCount++;
+  gSel = null;
+  gMoves = [];
+  if (captured > 0) sound.playCapture();
+  else sound.playMove();
+
+  const win = ggCheckWin();
+  if (win) {
+    gOver = true;
+    gWinner = (win === 1) ? '黑方胜利！' : '白方胜利！';
+    sound.playWin();
+  } else if (gCount >= 300) {
+    gOver = true;
+    gWinner = '平局（步数上限）';
+  } else {
+    ggSwitchTurn();
+  }
+  draw();
+}
+
+function ggSwitchTurn() {
+  gTurn = (gTurn === 1) ? 2 : 1;
+  if (gActive === 'puluc' && gPulucRoll < 0) {
+    gPulucRoll = puluc.roll(); // 回合开始自动掷骰
+    gPulucPhase = 'move';
+  }
+  ggCheckAi();
+}
+
+// AI 回合调度
+function ggCheckAi() {
+  if (gOver || !gActive) return;
+  const isAi = (gSide === 1 && gTurn === 2) || (gSide === 2 && gTurn === 1);
+  if (isAi) {
+    gThink = true;
+    draw();
+    setTimeout(() => ggExecAi(), 350);
+  } else {
+    gThink = false;
+  }
+}
+
+function ggExecAi() {
+  if (gOver || !gActive || showMenu) return;
+  if (gActive === 'puluc' && gPulucRoll < 0) gPulucRoll = puluc.roll();
+  const move = ggAiMove();
+  if (move) {
+    ggApply(move);
+  } else {
+    // 无棋可走
+    gOver = true;
+    gWinner = (gTurn === 1) ? '白方胜利！' : '黑方胜利！';
+    sound.playWin();
+    draw();
+  }
+}
+
+// 玩家触摸：按游戏分发（r, c 为棋盘坐标）
+function onGGTap(r, c) {
+  if (gOver || gThink || !gActive) return;
+  if (gActive === 'seega') onGgSeegaTap(r, c);
+  else if (gActive === 'mutorere') onGgMuTap(r, c);
+  else if (gActive === 'konane') onGgKoTap(r, c);
+  else if (gActive === 'puluc') onGgPuTap(r, c);
+}
+
+// —— 施嘉：放置 / 选子移动 ——
+function onGgSeegaTap(r, c) {
+  if (gSide === 2 && gTurn === seega.PIECE.Black) return; // AI 回合
+  if (gSide === 1 && gTurn === seega.PIECE.White) return;
+  const me = gTurn;
+  if (gState.phase === 'place') {
+    if (gState.board[r][c] === seega.PIECE.None && !seega.isCenterCross(r, c)) {
+      ggApply({ place: { r, c } });
+    }
+    draw();
+    return;
+  }
+  if (!gSel) {
+    if (gState.board[r][c] === me) {
+      gSel = { r, c };
+      gMoves = seega.moves(gState.board, me).filter(m => m.from.r === r && m.from.c === c);
+    }
+  } else if (r === gSel.r && c === gSel.c) {
+    gSel = null; gMoves = [];
+  } else if (gState.board[r][c] === me) {
+    gSel = { r, c };
+    gMoves = seega.moves(gState.board, me).filter(m => m.from.r === r && m.from.c === c);
+  } else {
+    const mv = gMoves.find(m => m.to.r === r && m.to.c === c);
+    if (mv) ggApply(mv);
+    else { gSel = null; gMoves = []; }
+  }
+  draw();
+}
+
+// —— 舞棋：选子移动（点索引 0..8：0-7 外围，8 中心）——
+function onGgMuTap(r, c) {
+  const idx = r * 3 + c; // 9 点网格：0..8
+  if (gSide === 2 && gTurn === mutorere.PIECE.Black) return;
+  if (gSide === 1 && gTurn === mutorere.PIECE.White) return;
+  const me = gTurn;
+  if (!gSel) {
+    if (gState[idx] === me) {
+      gSel = idx;
+      gMoves = mutorere.moves(gState, me).filter(m => m.from === idx);
+    }
+  } else if (idx === gSel) {
+    gSel = null; gMoves = [];
+  } else if (gState[idx] === me) {
+    gSel = idx;
+    gMoves = mutorere.moves(gState, me).filter(m => m.from === idx);
+  } else {
+    const mv = gMoves.find(m => m.to === idx);
+    if (mv) ggApply(mv);
+    else { gSel = null; gMoves = []; }
+  }
+  draw();
+}
+
+// —— 跳棋：选子 → 连跳目标 ——
+function onGgKoTap(r, c) {
+  if (gSide === 2 && gTurn === konane.PIECE.Black) return;
+  if (gSide === 1 && gTurn === konane.PIECE.White) return;
+  const me = gTurn;
+  if (!gSel) {
+    if (gState[r][c] === me) {
+      const seqs = konane.jumpSequencesFrom(gState, me, r, c);
+      if (seqs.length > 0) {
+        gSel = { r, c };
+        gMoves = seqs;
+      }
+    }
+  } else if (r === gSel.r && c === gSel.c) {
+    gSel = null; gMoves = [];
+  } else if (gState[r][c] === me) {
+    const seqs = konane.jumpSequencesFrom(gState, me, r, c);
+    if (seqs.length > 0) {
+      gSel = { r, c };
+      gMoves = seqs;
+    }
+  } else {
+    const mv = gMoves.find(m => m.to.r === r && m.to.c === c);
+    if (mv) ggApply(mv);
+    else { gSel = null; gMoves = []; }
+  }
+  draw();
+}
+
+// —— 普鲁克：自动掷骰后选择移动（点格 0..4；r<0 表示点"家"区进场）——
+function onGgPuTap(r, c) {
+  if (gOver || gThink || !gActive) return;
+  if (gSide === 2 && gTurn === puluc.PIECE.Black) return;
+  if (gSide === 1 && gTurn === puluc.PIECE.White) return;
+  if (gPulucRoll < 0) return;
+  if (r < 0) {
+    // 进场
+    const m = gMoves.find(x => x.kind === 'enter');
+    if (m) ggApply(m);
+    draw();
+    return;
+  }
+  const m = gMoves.find(x => x.kind === 'move' && x.pos === c);
+  if (m) {
+    const stack = gState.cells[c];
+    if (stack.length > 0 && stack[stack.length - 1].side === gTurn) {
+      ggApply(m);
+      return;
+    }
+  }
+  draw();
 }
 
 // ================= 渲染 =================
@@ -581,12 +1156,521 @@ function drawWoodBackground() {
   }
 }
 
+// 主菜单：酒馆招牌 + 六种棋局入口
+function drawMainMenu() {
+  // 招牌标题
+  drawText('骑砍二的小酒馆', W / 2, SAFE_TOP + 78, C.gold, 30, 'center', 'middle');
+  // 装饰分隔线
+  ctx.strokeStyle = 'rgba(240, 192, 96, 0.45)';
+  ctx.lineWidth = 1.5;
+  const lineW = 180;
+  ctx.beginPath();
+  ctx.moveTo(W / 2 - lineW / 2, SAFE_TOP + 106);
+  ctx.lineTo(W / 2 + lineW / 2, SAFE_TOP + 106);
+  ctx.stroke();
+  drawText('—— 选个棋局，来一局 ——', W / 2, SAFE_TOP + 128, C.dim, 13, 'center', 'middle');
+
+  // 六个棋局按钮：全部已开放，金色高亮
+  for (const b of menuButtons) {
+    const g = GAMES[b.gameId - 1];
+    const open = true;
+    fillRoundRect(b.x, b.y, b.w, b.h, 12, open ? '#4a2f18' : '#35261a');
+    strokeRoundRect(b.x, b.y, b.w, b.h, 12, open ? C.gold : '#6b5a3a', open ? 1.6 : 1);
+    drawText(g.name, b.x + b.w / 2, b.y + b.h / 2 - 10, open ? C.parchment : '#9a8a6a', 16, 'center', 'middle');
+    drawText('（' + g.origin + '）', b.x + b.w / 2, b.y + b.h / 2 + 12, open ? '#c9a86a' : '#7a6a4a', 12, 'center', 'middle');
+  }
+
+  // 底部提示
+  drawText(menuTip || '选择棋局开始游戏', W / 2, H - SAFE_TOP - 36, menuTip ? C.gold : C.dim, 13, 'center', 'middle');
+}
+
+// ================= 狼羊棋渲染 =================
+
+function drawWolfSheep() {
+  // 标题
+  drawText('狼羊棋', W / 2, SAFE_TOP + TITLE_H / 2, C.text, 22, 'center', 'middle');
+  drawText('‹ 菜单', 14, SAFE_TOP + TITLE_H / 2, C.gold, 15, 'left', 'middle');
+
+  // 状态行
+  let status = '';
+  let statusColor = C.dim;
+  if (wsThinking) {
+    status = 'AI 思考中…';
+    statusColor = C.gold;
+  } else if (wsGameOver) {
+    status = '对局结束';
+    statusColor = C.dim;
+  } else if (ws.turn === wsmod.PIECE.Wolf) {
+    status = '狼方回合';
+  } else {
+    status = '羊方回合' + (ws.phase === 'place' ? '（放置 ' + ws.placed + '/20）' : '（移动）');
+  }
+  status += ' · 已吃羊 ' + ws.captured + '/5';
+  drawText(status, W / 2, SAFE_TOP + TITLE_H + STATUS_H / 2, statusColor, 14, 'center', 'middle');
+
+  drawWsBoard();
+  drawWsToggle(wsButtons[0]);
+  for (let i = 1; i < wsButtons.length; i++) drawButton(wsButtons[i]);
+
+  // 弹窗
+  wsModalButtons = [];
+  if (wsGameOver) drawWsGameOverModal();
+  else if (wsShowRules) drawWsRulesModal();
+}
+
+function drawWsBoard() {
+  const { bx, by, cell } = wsLayout;
+
+  // 棋盘底板
+  fillRoundRect(bx - 14, by - 14, cell * 4 + 28, cell * 4 + 28, 10, C.boardBg);
+
+  // 连线：正交 + 每个 2×2 方格两条对角线（对应 8 方向移动）
+  ctx.strokeStyle = 'rgba(90, 60, 25, 0.55)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let r = 0; r < 5; r++) {
+    for (let c = 0; c < 5; c++) {
+      const x = bx + c * cell, y = by + r * cell;
+      if (c < 4) { ctx.moveTo(x, y); ctx.lineTo(x + cell, y); }
+      if (r < 4) { ctx.moveTo(x, y); ctx.lineTo(x, y + cell); }
+      if (r < 4 && c < 4) {
+        ctx.moveTo(x, y); ctx.lineTo(x + cell, y + cell);
+        ctx.moveTo(x + cell, y); ctx.lineTo(x, y + cell);
+      }
+    }
+  }
+  ctx.stroke();
+
+  // 落点
+  for (let r = 0; r < 5; r++) {
+    for (let c = 0; c < 5; c++) {
+      const x = bx + c * cell, y = by + r * cell;
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#5a3e1a';
+      ctx.fill();
+    }
+  }
+
+  if (!ws) return;
+
+  // 羊放置阶段提示（玩家执羊时显示可放点）
+  if (!wsGameOver && !wsThinking && wsSide === 2 && ws.turn === wsmod.PIECE.Sheep && ws.phase === 'place') {
+    ctx.fillStyle = 'rgba(240, 192, 96, 0.45)';
+    for (let r = 0; r < 5; r++) {
+      for (let c = 0; c < 5; c++) {
+        if (ws.board[r][c] === wsmod.PIECE.None) {
+          ctx.beginPath();
+          ctx.arc(bx + c * cell, by + r * cell, 6, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+  }
+
+  // 选中棋子的可走/可跳点
+  if (wsSelected) {
+    ctx.fillStyle = 'rgba(240, 192, 96, 0.8)';
+    for (const m of wsMoves) {
+      ctx.beginPath();
+      ctx.arc(bx + m.to.c * cell, by + m.to.r * cell, 7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // 棋子：狼=深色大圆（金色眼），羊=白色小圆
+  for (let r = 0; r < 5; r++) {
+    for (let c = 0; c < 5; c++) {
+      const p = ws.board[r][c];
+      if (p === wsmod.PIECE.None) continue;
+      const x = bx + c * cell, y = by + r * cell;
+      if (p === wsmod.PIECE.Wolf) {
+        if (wsSelected && wsSelected.r === r && wsSelected.c === c) {
+          ctx.beginPath(); ctx.arc(x, y, cell * 0.36, 0, Math.PI * 2); ctx.fillStyle = C.gold; ctx.fill();
+        }
+        ctx.beginPath(); ctx.arc(x, y, cell * 0.30, 0, Math.PI * 2); ctx.fillStyle = C.attacker; ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 1; ctx.stroke();
+        ctx.fillStyle = C.gold;
+        ctx.beginPath(); ctx.arc(x - cell * 0.09, y - cell * 0.05, 2.2, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x + cell * 0.09, y - cell * 0.05, 2.2, 0, Math.PI * 2); ctx.fill();
+      } else {
+        ctx.beginPath(); ctx.arc(x, y, cell * 0.21, 0, Math.PI * 2); ctx.fillStyle = C.defender; ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1; ctx.stroke();
+      }
+    }
+  }
+}
+
+// 执狼/执羊拨动滑块（与古典象棋同款风格）
+function drawWsToggle(b) {
+  const r = b.h / 2;
+  fillRoundRect(b.x, b.y, b.w, b.h, r, '#4a2f18');
+  const half = b.w / 2;
+  const pos = (wsSide === 1) ? 0 : 1;
+  const cx = b.x + half / 2 + half * pos;
+  const capW = half - 8;
+  fillRoundRect(cx - capW / 2, b.y + 4, capW, b.h - 8, (b.h - 8) / 2, C.gold);
+  drawText('执狼', b.x + half / 2, b.y + b.h / 2, wsSide === 1 ? '#2b2b2b' : '#a08060', 15, 'center', 'middle');
+  drawText('执羊', b.x + half + half / 2, b.y + b.h / 2, wsSide === 2 ? '#2b2b2b' : '#a08060', 15, 'center', 'middle');
+}
+
+function drawWsGameOverModal() {
+  drawOverlay();
+  const bw = Math.min(W - 80, 300);
+  const bh = 150;
+  const bx = (W - bw) / 2;
+  const by = (H - bh) / 2;
+  fillRoundRect(bx, by, bw, bh, 14, '#ffffff');
+  drawText(wsWinner, bx + bw / 2, by + 46, '#333333', 22, 'center', 'middle');
+  const btnW = bw - 64;
+  const btnH = 44;
+  const btnX = bx + (bw - btnW) / 2;
+  const btnY = by + bh - btnH - 20;
+  fillRoundRect(btnX, btnY, btnW, btnH, 22, '#c0392b');
+  drawText('再来一局', btnX + btnW / 2, btnY + btnH / 2, '#ffffff', 16, 'center', 'middle');
+  wsModalButtons.push({ id: 'ws-again', x: btnX, y: btnY, w: btnW, h: btnH });
+}
+
+function drawWsRulesModal() {
+  drawOverlay();
+  const bw = Math.min(W - 48, 340);
+  const bh = Math.min(H - 80, 520);
+  const bx = (W - bw) / 2;
+  const by = (H - bh) / 2;
+  fillRoundRect(bx, by, bw, bh, 14, C.parchment);
+  drawText('规则', bx + bw / 2, by + 32, C.parchmentTitle, 20, 'center', 'middle');
+  const font = '14px sans-serif';
+  const pad = 22;
+  const lineH = 24;
+  const maxWidth = bw - pad * 2;
+  let ty = by + 62;
+  const maxTY = by + bh - 70;
+  for (const item of WS_RULES) {
+    const lines = wrapText(item, maxWidth, font);
+    for (const ln of lines) {
+      if (ty > maxTY) break;
+      drawText(ln, bx + pad, ty, C.parchmentText, 14, 'left', 'middle');
+      ty += lineH;
+    }
+  }
+  const btnW = bw - 48;
+  const btnH = 44;
+  const btnX = bx + (bw - btnW) / 2;
+  const btnY = by + bh - btnH - 16;
+  fillRoundRect(btnX, btnY, btnW, btnH, 22, '#e5d0a0');
+  drawText('知道了', btnX + btnW / 2, btnY + btnH / 2, C.parchmentTitle, 16, 'center', 'middle');
+  wsModalButtons.push({ id: 'ws-rules-close', x: btnX, y: btnY, w: btnW, h: btnH });
+}
+
+// ================= 四款新棋渲染 =================
+
+function drawGG() {
+  const info = GG_MODS[gActive];
+  // 标题
+  drawText(info.name, W / 2, SAFE_TOP + TITLE_H / 2, C.text, 22, 'center', 'middle');
+  drawText('‹ 菜单', 14, SAFE_TOP + TITLE_H / 2, C.gold, 15, 'left', 'middle');
+
+  // 状态行
+  let status = '';
+  let statusColor = C.dim;
+  if (gThink) {
+    status = 'AI 思考中…';
+    statusColor = C.gold;
+  } else if (gOver) {
+    status = '对局结束';
+    statusColor = C.dim;
+  } else {
+    status = (gTurn === 1 ? '黑方回合' : '白方回合');
+    if (gActive === 'seega' && gState.phase === 'place') status += '（放置 ' + gState.placed[1] + '/' + gState.placed[2] + '）';
+    if (gActive === 'puluc') status += ' · 掷出 ' + gPulucRoll + ' 步';
+  }
+  drawText(status, W / 2, SAFE_TOP + TITLE_H + STATUS_H / 2, statusColor, 14, 'center', 'middle');
+
+  // 棋盘
+  if (gActive === 'seega') drawGgSeega();
+  else if (gActive === 'mutorere') drawGgMu();
+  else if (gActive === 'konane') drawGgKonane();
+  else if (gActive === 'puluc') drawGgPuluc();
+
+  // 按钮：执黑/执白 toggle（第一行）+ 重新开始/规则（第二行）
+  const y1 = gLayout.by + gLayout.size + 16;
+  const y2 = y1 + BTN_H + BTN_GAP;
+  const toggleW = Math.min(220, W - 32);
+  const row2W = (W - 32 - BTN_GAP) / 2;
+  drawGgToggle((W - toggleW) / 2, y1, toggleW);
+  drawButton({ id: 'gg-restart', text: '重新开始', x: 16, y: y2, w: row2W, h: BTN_H });
+  drawButton({ id: 'gg-rules', text: '规则', x: 16 + row2W + BTN_GAP, y: y2, w: row2W, h: BTN_H });
+
+  // 弹窗
+  gModal = [];
+  if (gOver) drawGgGameOverModal();
+  else if (gShowRules) drawGgRulesModal();
+}
+
+function drawGgPiece(cx, cy, rad, color, sel) {
+  if (sel) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, rad + 4, 0, Math.PI * 2);
+    ctx.fillStyle = C.gold;
+    ctx.fill();
+  }
+  ctx.beginPath();
+  ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+// 施嘉：5×5 方格
+function drawGgSeega() {
+  const size = gLayout.size, cell = size / 5;
+  const bx = gLayout.bx, by = gLayout.by;
+  fillRoundRect(bx - 6, by - 6, size + 12, size + 12, 10, C.boardBg);
+  for (let r = 0; r < 5; r++) {
+    for (let c = 0; c < 5; c++) {
+      const x = bx + c * cell, y = by + r * cell;
+      fillRoundRect(x + 1, y + 1, cell - 2, cell - 2, 3, seega.isCenterCross(r, c) ? C.throne : C.cell);
+      if (seega.isCenterCross(r, c)) {
+        ctx.fillStyle = C.gold;
+        ctx.beginPath();
+        ctx.arc(x + cell / 2, y + cell / 2, cell * 0.12, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+  // 放置阶段可放点提示
+  if (!gOver && !gThink && gState.phase === 'place') {
+    const playerTurn = (gSide === 1 && gTurn === 1) || (gSide === 2 && gTurn === 2);
+    if (playerTurn) {
+      ctx.fillStyle = 'rgba(240, 192, 96, 0.5)';
+      for (let r = 0; r < 5; r++) {
+        for (let c = 0; c < 5; c++) {
+          if (gState.board[r][c] === seega.PIECE.None && !seega.isCenterCross(r, c)) {
+            ctx.beginPath();
+            ctx.arc(bx + c * cell + cell / 2, by + r * cell + cell / 2, 5, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
+    }
+  }
+  // 可走格
+  if (gSel) {
+    ctx.fillStyle = 'rgba(240, 192, 96, 0.8)';
+    for (const m of gMoves) {
+      ctx.beginPath();
+      ctx.arc(bx + m.to.c * cell + cell / 2, by + m.to.r * cell + cell / 2, 6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  // 棋子
+  for (let r = 0; r < 5; r++) {
+    for (let c = 0; c < 5; c++) {
+      const p = gState.board[r][c];
+      if (p === seega.PIECE.None) continue;
+      const cx = bx + c * cell + cell / 2, cy = by + r * cell + cell / 2;
+      const sel = !!(gSel && gSel.r === r && gSel.c === c);
+      if (p === seega.PIECE.Black) drawGgPiece(cx, cy, cell * 0.38, C.attacker, sel);
+      else drawGgPiece(cx, cy, cell * 0.38, C.defender, sel);
+    }
+  }
+}
+
+// 舞棋：8 外围点 + 中心
+function drawGgMu() {
+  const { cx, cy, r } = gLayout;
+  fillRoundRect(cx - r - 18, cy - r - 18, r * 2 + 36, r * 2 + 36, 12, C.boardBg);
+  const pts = [];
+  for (let i = 0; i < 8; i++) {
+    const a = -Math.PI / 2 + i * Math.PI / 4;
+    pts.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r });
+  }
+  ctx.strokeStyle = 'rgba(90, 60, 25, 0.55)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let i = 0; i < 8; i++) {
+    const p = pts[i], q = pts[(i + 1) % 8];
+    ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y);
+    ctx.moveTo(cx, cy); ctx.lineTo(p.x, p.y);
+  }
+  ctx.stroke();
+  // 可移动提示
+  if (gSel != null) {
+    ctx.fillStyle = 'rgba(240, 192, 96, 0.8)';
+    for (const m of gMoves) {
+      if (m.to === 8) { ctx.beginPath(); ctx.arc(cx, cy, 8, 0, Math.PI * 2); ctx.fill(); }
+      else { ctx.beginPath(); ctx.arc(pts[m.to].x, pts[m.to].y, 8, 0, Math.PI * 2); ctx.fill(); }
+    }
+  }
+  // 棋子
+  for (let i = 0; i < 9; i++) {
+    const p = gState[i];
+    if (p === mutorere.PIECE.None) continue;
+    const x = (i === 8) ? cx : pts[i].x;
+    const y = (i === 8) ? cy : pts[i].y;
+    const sel = (gSel === i);
+    if (p === mutorere.PIECE.Black) drawGgPiece(x, y, 16, C.attacker, sel);
+    else drawGgPiece(x, y, 16, C.defender, sel);
+  }
+}
+
+// 跳棋：8×8 方格
+function drawGgKonane() {
+  const size = gLayout.size, cell = size / 8;
+  const bx = gLayout.bx, by = gLayout.by;
+  fillRoundRect(bx - 6, by - 6, size + 12, size + 12, 10, C.boardBg);
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const x = bx + c * cell, y = by + r * cell;
+      fillRoundRect(x + 1, y + 1, cell - 2, cell - 2, 2, ((r + c) % 2 === 0) ? C.cell : '#b9884f');
+    }
+  }
+  // 可跳目标提示
+  if (gSel) {
+    ctx.fillStyle = 'rgba(240, 192, 96, 0.85)';
+    for (const s of gMoves) {
+      ctx.beginPath();
+      ctx.arc(bx + s.to.c * cell + cell / 2, by + s.to.r * cell + cell / 2, 7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  // 棋子
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = gState[r][c];
+      if (p === konane.PIECE.None) continue;
+      const cx = bx + c * cell + cell / 2, cy = by + r * cell + cell / 2;
+      const sel = !!(gSel && gSel.r === r && gSel.c === c);
+      if (p === konane.PIECE.Black) drawGgPiece(cx, cy, cell * 0.38, C.attacker, sel);
+      else drawGgPiece(cx, cy, cell * 0.38, C.defender, sel);
+    }
+  }
+}
+
+// 普鲁克：5 格道路 + 家/离场 + 骰子
+function drawGgPuluc() {
+  const road = gLayout.road, ry = gLayout.by + gLayout.size / 2 - road / 2;
+  const rx = (W - road * 5) / 2;
+  // 道路格
+  for (let i = 0; i < 5; i++) {
+    const x = rx + i * road;
+    fillRoundRect(x + 1, ry + 1, road - 2, road - 2, 4, (i % 2 === 0) ? C.cell : '#b9884f');
+    const stack = gState.cells[i];
+    for (let j = 0; j < stack.length; j++) {
+      const pc = stack[j];
+      const px = x + road / 2, py = ry + road / 2 + (j - (stack.length - 1)) * 8;
+      if (pc.side === puluc.PIECE.Black) drawGgPiece(px, py, 10, C.attacker, false);
+      else drawGgPiece(px, py, 10, C.defender, false);
+    }
+  }
+  // 可移动提示
+  if (gPulucRoll >= 0 && !gOver && !gThink) {
+    ctx.strokeStyle = C.gold;
+    ctx.lineWidth = 2;
+    for (const m of gMoves) {
+      const px = (m.kind === 'enter') ? rx + road / 2 : rx + m.pos * road + road / 2;
+      ctx.beginPath();
+      ctx.arc(px, ry + road / 2, 9, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+  // 家区与离场
+  drawText('黑家 ' + gState.home[1] + ' · 离场 ' + gState.done[1], rx, ry - 18, C.text, 12, 'left', 'middle');
+  drawText('白家 ' + gState.home[2] + ' · 离场 ' + gState.done[2], rx + road * 5, ry - 18, C.text, 12, 'right', 'middle');
+  // 骰子
+  if (gPulucRoll >= 0) {
+    drawText('掷出 ' + gPulucRoll + ' 步', W / 2, ry + road + 22, C.gold, 15, 'center', 'middle');
+  }
+}
+
+// 执黑/执白拨动滑块（同款金色胶囊）
+function drawGgToggle(x, y, w) {
+  const r = BTN_H / 2;
+  fillRoundRect(x, y, w, BTN_H, r, '#4a2f18');
+  const half = w / 2;
+  const pos = (gSide === 1) ? 0 : 1;
+  const cx = x + half / 2 + half * pos;
+  const capW = half - 8;
+  fillRoundRect(cx - capW / 2, y + 4, capW, BTN_H - 8, (BTN_H - 8) / 2, C.gold);
+  drawText('执黑', x + half / 2, y + BTN_H / 2, gSide === 1 ? '#2b2b2b' : '#a08060', 15, 'center', 'middle');
+  drawText('执白', x + half + half / 2, y + BTN_H / 2, gSide === 2 ? '#2b2b2b' : '#a08060', 15, 'center', 'middle');
+}
+
+function drawGgGameOverModal() {
+  drawOverlay();
+  const bw = Math.min(W - 80, 300);
+  const bh = 150;
+  const bx = (W - bw) / 2;
+  const by = (H - bh) / 2;
+  fillRoundRect(bx, by, bw, bh, 14, '#ffffff');
+  drawText(gWinner, bx + bw / 2, by + 46, '#333333', 22, 'center', 'middle');
+  const btnW = bw - 64;
+  const btnH = 44;
+  const btnX = bx + (bw - btnW) / 2;
+  const btnY = by + bh - btnH - 20;
+  fillRoundRect(btnX, btnY, btnW, btnH, 22, '#c0392b');
+  drawText('再来一局', btnX + btnW / 2, btnY + btnH / 2, '#ffffff', 16, 'center', 'middle');
+  gModal.push({ id: 'gg-again', x: btnX, y: btnY, w: btnW, h: btnH });
+}
+
+function drawGgRulesModal() {
+  drawOverlay();
+  const bw = Math.min(W - 48, 340);
+  const bh = Math.min(H - 80, 520);
+  const bx = (W - bw) / 2;
+  const by = (H - bh) / 2;
+  fillRoundRect(bx, by, bw, bh, 14, C.parchment);
+  drawText(GG_MODS[gActive].name, bx + bw / 2, by + 32, C.parchmentTitle, 20, 'center', 'middle');
+  const font = '14px sans-serif';
+  const pad = 22;
+  const lineH = 24;
+  const maxWidth = bw - pad * 2;
+  let ty = by + 62;
+  const maxTY = by + bh - 70;
+  for (const item of GG_MODS[gActive].rules) {
+    const lines = wrapText(item, maxWidth, font);
+    for (const ln of lines) {
+      if (ty > maxTY) break;
+      drawText(ln, bx + pad, ty, C.parchmentText, 14, 'left', 'middle');
+      ty += lineH;
+    }
+  }
+  const btnW = bw - 48;
+  const btnH = 44;
+  const btnX = bx + (bw - btnW) / 2;
+  const btnY = by + bh - btnH - 16;
+  fillRoundRect(btnX, btnY, btnW, btnH, 22, '#e5d0a0');
+  drawText('知道了', btnX + btnW / 2, btnY + btnH / 2, C.parchmentTitle, 16, 'center', 'middle');
+  gModal.push({ id: 'gg-rules-close', x: btnX, y: btnY, w: btnW, h: btnH });
+}
+
 function draw() {
   // 背景（木纹）
   drawWoodBackground();
 
+  // 主菜单
+  if (showMenu) {
+    drawMainMenu();
+    return;
+  }
+
+  // 狼羊棋页面
+  if (wsActive) {
+    drawWolfSheep();
+    return;
+  }
+
+  // 四款新棋页面
+  if (gActive) {
+    drawGG();
+    return;
+  }
+
   // 标题
-  drawText('帝国板棋', W / 2, SAFE_TOP + TITLE_H / 2, C.text, 22, 'center', 'middle');
+  drawText('古典象棋', W / 2, SAFE_TOP + TITLE_H / 2, C.text, 22, 'center', 'middle');
+  drawText('‹ 菜单', 14, SAFE_TOP + TITLE_H / 2, C.gold, 15, 'left', 'middle');
 
   // 状态行
   let status = '';
@@ -756,6 +1840,138 @@ function copyLog() {
 }
 
 function handleTap(x, y) {
+  // 主菜单：六个棋局入口
+  if (showMenu) {
+    for (const b of menuButtons) {
+      if (hitTest(b, x, y)) {
+        const g = GAMES[b.gameId - 1];
+        if (b.gameId === 1) {
+          startGame(); // 古典象棋（萨米板棋）
+        } else if (b.gameId === 2) {
+          enterWolfSheep(); // 狼羊棋（尼泊尔虎棋）
+        } else {
+          const ggKey = ['', '', '', 'seega', 'mutorere', 'konane', 'puluc'][b.gameId];
+          enterGG(ggKey); // 施嘉/舞棋/跳棋/普鲁克
+        }
+        return;
+      }
+    }
+    return; // 菜单模式下忽略其它点击
+  }
+
+  // 四款新棋页面
+  if (gActive) {
+    // 弹窗优先
+    if (gOver) {
+      for (const b of gModal) {
+        if (b.id === 'gg-again' && hitTest(b, x, y)) { startGG(); return; }
+      }
+      return; // 必须点按钮
+    }
+    if (gShowRules) {
+      for (const b of gModal) {
+        if (b.id === 'gg-rules-close' && hitTest(b, x, y)) { gShowRules = false; draw(); return; }
+      }
+      gShowRules = false; // 点遮罩关闭
+      draw();
+      return;
+    }
+    // 返回菜单
+    if (x >= 0 && x <= 90 && y >= SAFE_TOP && y <= SAFE_TOP + TITLE_H) { backToMenu(); return; }
+    // 底部按钮
+    const gy1 = gLayout.by + gLayout.size + 16;
+    const gy2 = gy1 + BTN_H + BTN_GAP;
+    const toggleW = Math.min(220, W - 32);
+    const row2W = (W - 32 - BTN_GAP) / 2;
+    const tx = (W - toggleW) / 2;
+    if (hitTest({ x: tx, y: gy1, w: toggleW, h: BTN_H }, x, y)) {
+      gSide = (x < tx + toggleW / 2) ? 1 : 2; // 左半执黑、右半执白
+      startGG();
+      return;
+    }
+    if (hitTest({ x: 16, y: gy2, w: row2W, h: BTN_H }, x, y)) { startGG(); return; }
+    if (hitTest({ x: 16 + row2W + BTN_GAP, y: gy2, w: row2W, h: BTN_H }, x, y)) { gShowRules = true; draw(); return; }
+    // 舞棋：最近点命中
+    if (gActive === 'mutorere') {
+      const { cx, cy, r } = gLayout;
+      const pts = [];
+      for (let i = 0; i < 8; i++) {
+        const a = -Math.PI / 2 + i * Math.PI / 4;
+        pts.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r });
+      }
+      pts.push({ x: cx, y: cy });
+      let best = -1, bestD = 1e9;
+      for (let i = 0; i < 9; i++) {
+        const d = (x - pts[i].x) * (x - pts[i].x) + (y - pts[i].y) * (y - pts[i].y);
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      if (best >= 0 && bestD < (r * 0.35) * (r * 0.35)) onGGTap(Math.floor(best / 3), best % 3);
+      return;
+    }
+    // 普鲁克：道路格 / 家区
+    if (gActive === 'puluc') {
+      const road = gLayout.road, ry = gLayout.by + gLayout.size / 2 - road / 2;
+      const rx = (W - road * 5) / 2;
+      if (x >= rx && x <= rx + road * 5 && y >= ry && y <= ry + road) {
+        const c = Math.floor((x - rx) / road);
+        if (c >= 0 && c < 5) onGGTap(0, c);
+        return;
+      }
+      if (y >= ry - 26 && y < ry) { onGGTap(-1, -1); return; } // 点家区进场
+      return;
+    }
+    // 方格类：施嘉 5×5 / 跳棋 8×8
+    const size = gLayout.size, bx = gLayout.bx, by = gLayout.by;
+    const n = (gActive === 'seega') ? 5 : 8;
+    const cell = size / n;
+    if (x >= bx && x <= bx + size && y >= by && y <= by + size) {
+      const c = Math.floor((x - bx) / cell);
+      const r = Math.floor((y - by) / cell);
+      if (r >= 0 && r < n && c >= 0 && c < n) onGGTap(r, c);
+    }
+    return;
+  }
+
+  // 狼羊棋页面
+  if (wsActive) {
+    // 弹窗优先
+    if (wsGameOver) {
+      for (const b of wsModalButtons) {
+        if (b.id === 'ws-again' && hitTest(b, x, y)) { startWsGame(); return; }
+      }
+      return; // 必须点按钮
+    }
+    if (wsShowRules) {
+      for (const b of wsModalButtons) {
+        if (b.id === 'ws-rules-close' && hitTest(b, x, y)) { wsShowRules = false; draw(); return; }
+      }
+      wsShowRules = false; // 点遮罩关闭
+      draw();
+      return;
+    }
+    // 返回菜单
+    if (x >= 0 && x <= 90 && y >= SAFE_TOP && y <= SAFE_TOP + TITLE_H) { backToMenu(); return; }
+    // 底部按钮
+    for (const b of wsButtons) {
+      if (hitTest(b, x, y)) {
+        if (b.id === 'ws-toggle') {
+          wsSide = (x < b.x + b.w / 2) ? 1 : 2; // 左半执狼、右半执羊
+          startWsGame();
+        } else if (b.id === 'ws-restart') startWsGame();
+        else if (b.id === 'ws-rules') { wsShowRules = true; draw(); }
+        return;
+      }
+    }
+    // 棋盘（5×5 点阵）
+    const { bx, by, cell } = wsLayout;
+    if (x >= bx - cell / 2 && x <= bx + cell * 4 + cell / 2 && y >= by - cell / 2 && y <= by + cell * 4 + cell / 2) {
+      const c = Math.round((x - bx) / cell);
+      const r = Math.round((y - by) / cell);
+      if (r >= 0 && r < 5 && c >= 0 && c < 5) onWsTap(r, c);
+    }
+    return;
+  }
+
   // 弹窗优先
   if (isGameOver) {
     for (const b of modalButtons) {
@@ -789,6 +2005,12 @@ function handleTap(x, y) {
     }
     showLog = false; // 点遮罩关闭
     draw();
+    return;
+  }
+
+  // 标题栏左侧「‹ 菜单」返回主菜单
+  if (x >= 0 && x <= 90 && y >= SAFE_TOP && y <= SAFE_TOP + TITLE_H) {
+    backToMenu();
     return;
   }
 
@@ -837,4 +2059,8 @@ wx.onTouchStart(function (e) {
 // ---------- 启动 ----------
 gameMode = 1;
 ai.maxDepth = DIFF_DEPTH[difficulty]; // 应用难度设置
-startGame();
+computeWsLayout();
+buildWsButtons();
+computeGgLayout();
+showMenu = true;
+draw();
