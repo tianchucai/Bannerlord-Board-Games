@@ -1,17 +1,31 @@
-// 跳棋（Kōnane 夏威夷跳棋）：纯数据规则 + 贪心 AI
-// 规则：8×8 棋盘开局黑白交替填满；开局黑移除中心 (3,3)、白移除相邻 (3,4)；
+// 跳棋（Kōnane 夏威夷跳棋，骑砍2 斯特吉亚酒馆版）：纯数据规则 + 贪心 AI
+// 规则：6×6 棋盘开局黑白交替填满；黑（先手）从「四角 + 中央四格」中的己方棋子
+//       （每方恰好 4 枚：2 角 + 2 中央）选一枚移除；白随后移除一枚与空位相邻的棋子，
+//       若黑移除的是中央四格内的子，白也必须从中央四格内移除；之后黑先跳。
 //       只能跳跃吃子（跳过相邻敌子到正后方空位，四方向），可连续跳（强制跳到不能再跳）；
 //       无合法跳的一方败。
 
-const SIZE = 8;
+const SIZE = 6;
 const PIECE = { None: 0, Black: 1, White: 2 };
 const DIRS = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+
+// 四角与中央四格（开局可移除的候选区域）
+const CORNERS = [[0, 0], [0, SIZE - 1], [SIZE - 1, 0], [SIZE - 1, SIZE - 1]];
+const CENTER4 = [[2, 2], [2, 3], [3, 2], [3, 3]];
+
+function isCorner(r, c) {
+  return CORNERS.some(p => p[0] === r && p[1] === c);
+}
+
+function isCenter4(r, c) {
+  return CENTER4.some(p => p[0] === r && p[1] === c);
+}
 
 function createEmpty() {
   return Array.from({ length: SIZE }, () => Array(SIZE).fill(PIECE.None));
 }
 
-// 开局：填满交替色，黑移除 (3,3)，白移除 (3,4)，黑先跳
+// 开局：黑白交替填满 6×6（不自动移除，移除由开局阶段完成），黑先移除
 function setup() {
   const board = createEmpty();
   for (let r = 0; r < SIZE; r++) {
@@ -19,9 +33,40 @@ function setup() {
       board[r][c] = ((r + c) % 2 === 0) ? PIECE.Black : PIECE.White;
     }
   }
-  board[3][3] = PIECE.None;
-  board[3][4] = PIECE.None;
   return board;
+}
+
+// 先手方可移除的己方棋子：位于四角或中央四格（每方恰好 4 枚）
+function openingCandidates(board, side) {
+  const out = [];
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      if (board[r][c] === side && (isCorner(r, c) || isCenter4(r, c))) out.push({ r, c });
+    }
+  }
+  return out;
+}
+
+// 后手方可移除的棋子：己方与先手移除位相邻的棋子；
+// 若先手移除的是中央四格内的子，后手也只能从中央四格内移除
+// side 为后手方（正在移除的一方），first 为先手移除位置
+function secondRemovalChoices(board, side, first) {
+  const out = [];
+  for (const d of DIRS) {
+    const r = first.r + d[0], c = first.c + d[1];
+    if (r < 0 || r >= SIZE || c < 0 || c >= SIZE) continue;
+    if (board[r][c] !== side) continue;
+    if (isCenter4(first.r, first.c) && !isCenter4(r, c)) continue;
+    out.push({ r, c });
+  }
+  return out;
+}
+
+// 开局移除一枚棋子，返回新棋盘
+function applyRemoval(board, r, c) {
+  const nb = board.map(row => row.slice());
+  nb[r][c] = PIECE.None;
+  return nb;
 }
 
 function count(board, side) {
@@ -109,5 +154,6 @@ function checkWin(board, side) {
 
 module.exports = {
   SIZE, PIECE, DIRS, createEmpty, setup, count,
+  isCorner, isCenter4, openingCandidates, secondRemovalChoices, applyRemoval,
   jumpSequencesFrom, jumpSequences, hasAnyJump, applyMove, checkWin
 };

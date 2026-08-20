@@ -62,12 +62,13 @@ const STATUS_H = 30;
 const BTN_H = 42;
 const BTN_GAP = 10;
 const BTN_AREA_H = BTN_H * 3 + BTN_GAP * 2 + 18;
+const WS_CAP_H = 30; // 狼羊棋：棋盘下方「已吃羊」指示行高度
 
 // ---------- 主菜单：骑砍二酒馆六种棋局 ----------
 const GAMES = [
   { id: 1, name: '古典象棋', origin: '萨米板棋' },
   { id: 2, name: '狼羊棋', origin: '尼泊尔虎棋' },
-  { id: 3, name: '施嘉', origin: '埃及夹棋' },
+  { id: 3, name: '塞伽棋', origin: '埃及夹棋' },
   { id: 4, name: '舞棋', origin: '毛利星盘棋' },
   { id: 5, name: '跳棋', origin: '夏威夷跳棋' },
   { id: 6, name: '普鲁克', origin: '玛雅折返戏' }
@@ -100,17 +101,19 @@ function computeWsLayout() {
   const cell = Math.floor(Math.min((W - 60) / 4, availH / 4));
   wsLayout.cell = cell;
   wsLayout.bx = (W - cell * 4) / 2;
-  wsLayout.by = SAFE_TOP + TITLE_H + STATUS_H + 10;
+  // 状态行（回合文字）下方留足空隙，避免被棋盘底板遮挡
+  wsLayout.by = SAFE_TOP + TITLE_H + STATUS_H + 18;
 }
 
-// 狼羊棋底部按钮：执狼/执羊 toggle + 重新开始 + 规则
+// 狼羊棋底部按钮：执狼/执羊 toggle + 重新开始 + 规则（棋盘下先放「已吃羊」指示行）
 function buildWsButtons() {
   const margin = 16;
   const gap = 10;
   const usableW = W - margin * 2;
   const toggleW = Math.min(220, usableW);
   const row2W = (usableW - gap) / 2;
-  const y1 = wsLayout.by + wsLayout.cell * 4 + 16;
+  const capY = wsLayout.by + wsLayout.cell * 4 + 24; // 已吃羊指示行（见 drawWsCaptured）
+  const y1 = capY + WS_CAP_H + 10;                   // toggle 按钮
   const y2 = y1 + BTN_H + gap;
   wsButtons = [
     { id: 'ws-toggle', x: (W - toggleW) / 2, y: y1, w: toggleW, h: BTN_H },
@@ -209,26 +212,30 @@ const WS_RULES = [
   '羊获胜：困住 4 只狼，使狼无法走格也无法跳吃。'
 ];
 
-// ---------- 四款新棋（施嘉/舞棋/跳棋/普鲁克）通用状态 ----------
+// ---------- 四款新棋（塞伽棋/舞棋/跳棋/普鲁克）通用状态 ----------
 const GG_MODS = {
-  seega: { name: '施嘉', mod: seega, rules: [
-    '施嘉（Seega 埃及夹棋）：5×5 棋盘，中央十字（中心+上下左右）开局为空且禁止放置。',
-    '双方各 12 子，先轮流把子放到非中央十字的空位，放完 12 子后改为移动（水平/垂直一格）。',
-    '移动后，凡被己方水平或垂直夹住的敌子全部被吃；中央十字格上的棋子受保护不可被吃。',
-    '吃光对方全部棋子，或对方无合法移动者获胜。'
+  seega: { name: '塞伽棋', mod: seega, rules: [
+    '塞伽棋（Seega 埃及夹棋）：5×5 棋盘，仅中心格特殊（放置阶段禁落子，移动阶段可走入）。',
+    '【放置】双方轮流把棋子放到棋盘上，不能放在中心格；全部放完后进入移动阶段。',
+    '【移动】棋子只能横向或竖向移动一格，不能斜向移动。',
+    '【吃子】移动后，横向或竖向夹住对方单独一枚棋子即可吃掉（斜向不算）；只有你移动造成的夹击才算，对方主动走进你的两子中间不会被吃。',
+    '【无棋可走】轮到你的回合却无棋可走时，你必须移除对手任意一枚棋子，然后继续你的回合。',
+    '【胜利】将对手除 1 枚以外的全部棋子吃掉即可获胜。'
   ]},
   mutorere: { name: '舞棋', mod: mutorere, rules: [
-    '舞棋（Mū tōrere 毛利星盘棋）：8 个外围点环形 + 1 个中心点。',
-    '双方各 4 子，开局交替占据外围 8 点，中心空。',
-    '外围子可移到相邻外围空点，或移入中心（空时）。',
-    '中心子只能移到「两侧外围点都被占据」的外围空点。',
-    '无吃子；轮到某方无合法移动即败。'
+    '舞棋（Mū tōrere 毛利星盘棋）：8 个外围点环形 + 1 个中心点，双方各 4 子开局占满外围，中心空。',
+    '【移动】只能将旁边有对方棋子的棋子移入中心；每个棋子可自由沿棋盘外缘移动一格。',
+    '中心格上的棋子可以移动到任何空的外围格。',
+    '【胜利】无吃子；如果对手被阻挡并且无法进行任何移动，则该玩家获胜。',
+    '提示：双方都不犯错会无限循环和局；先手抢到中心点后优势极大。'
   ]},
   konane: { name: '跳棋', mod: konane, rules: [
-    '跳棋（Kōnane 夏威夷跳棋）：8×8 棋盘，开局黑白交替填满。',
-    '开局黑方移除中心一子，白方再移除相邻一子，然后黑方先跳。',
-    '只能跳跃吃子：跳过相邻的敌子到正后方空位（四方向），可连续跳且必须跳到不能再跳。',
-    '轮到某方无合法跳即败。'
+    '跳棋（Kōnane 夏威夷跳棋，斯特吉亚酒馆版）：6×6 棋盘，开局黑白交替填满 36 格。',
+    '【开局】黑方（先手）从「四角 + 中央四格」里的己方棋子（共 4 枚）中移除 1 枚。',
+    '白方随后移除 1 枚与空位相邻的棋子；若黑移除的是中央四格内的子，白也必须从中央四格内移除。',
+    '【走子】只能跳吃，不能平挪：沿横竖方向跳过紧邻的敌子到正后方空位（不能斜跳）。',
+    '【连跳】同一回合可连续跳吃多枚，须跳到不能再跳为止。',
+    '【胜利】轮到某方无任何合法跳即败，与剩余棋子多少无关。'
   ]},
   puluc: { name: '普鲁克', mod: puluc, rules: [
     '普鲁克（Puluc 玛雅折返戏）：一条 11 格道路，双方各 6 枚棋子从两端出发。',
@@ -252,6 +259,20 @@ let gThink = false;
 let gCount = 0;
 let gShowRules = false;
 let gShowLog = false;
+let gSeegaRemoval = false;  // 塞伽棋：当前方无棋可走，等待移除对手一子（true=轮到玩家点选）
+let gSeegaAnim = null;      // 塞伽棋行棋动画：{ kind:'place'|'move'|'remove', side, from, to, eaten, removed, t0, dur, phase }
+let gKonanePhase = 'play';  // 跳棋：'remove' 开局移除阶段 | 'play' 正常对局
+let gKonaneStep = 1;        // 跳棋开局移除：1=黑移除 2=白移除
+let gKonaneFirst = null;    // 跳棋先手移除位置
+let gKonaneConfirm = null;  // 跳棋开局移除确认：{r,c} 待确认移除的棋子
+let gKonaneAnim = null;     // 跳棋连跳动画：{ move, side, step, phase, t0, dur }
+
+const KONANE_FLY_MS = 300;  // 跳棋：每跳移动时长（ms）
+const KONANE_EAT_MS = 200;  // 跳棋：吃掉一子后的停顿（ms）
+const SEEGA_PLACE_MS = 320;  // 塞伽棋：放置动画时长（ms）
+const SEEGA_MOVE_MS = 520;   // 塞伽棋：移动动画时长（ms）
+const SEEGA_EAT_MS = 300;    // 塞伽棋：吃子停顿时长（ms）
+const SEEGA_REMOVE_MS = 380; // 塞伽棋：移除对手子动画时长（ms）
 let gLog = [];       // 行棋日志（字符串数组）
 let gLogTip = '';    // 日志复制反馈
 let gModal = [];
@@ -325,6 +346,9 @@ function backToMenu() {
   gThink = false;
   gStickAnim = null;
   gPulucAnim = null;
+  gKonaneAnim = null;
+  gSeegaAnim = null;
+  gKonaneConfirm = null;
   selected = null;
   movableCells = [];
   anim = null;
@@ -625,7 +649,7 @@ function computeGgLayout() {
   gLayout.size = size;
   gLayout.bx = (W - size) / 2;
   gLayout.by = SAFE_TOP + TITLE_H + STATUS_H + 10;
-  gLayout.cell = size / 8; // 8×8（跳棋）用满；5×5（施嘉）按需缩放
+  gLayout.cell = size / 6; // 6×6（跳棋）用满；5×5（塞伽棋）按需缩放
   gLayout.cx = W / 2;
   gLayout.cy = gLayout.by + size / 2;
   gLayout.r = size / 2 - 10; // 舞棋星盘半径
@@ -656,6 +680,11 @@ function startGG() {
   } else if (gActive === 'konane') {
     gState = konane.setup();
     gTurn = konane.PIECE.Black;
+    gKonanePhase = 'remove';
+    gKonaneStep = 1;
+    gKonaneFirst = null;
+    gKonaneConfirm = null;
+    gKonaneAnim = null;
   } else if (gActive === 'puluc') {
     gState = puluc.createState();
     gTurn = puluc.PIECE.Black;
@@ -670,6 +699,8 @@ function startGG() {
   gThink = false;
   gCount = 0;
   gShowRules = false;
+  gSeegaRemoval = false;
+  gSeegaAnim = null;
   gShowLog = false;
   gLog = [];
   gLogTip = '';
@@ -692,10 +723,17 @@ function ggAiMove() {
 }
 
 // 胜负判定
+// 注意：ggApply 调用时 gTurn 还是刚走完的一方，胜负要看「对手」（即将行动方）
+// 是否只剩 1 枚棋子（塞伽棋：将对手除 1 枚以外的全部棋子吃掉即获胜；
+// 无棋可走不再判负，而是改为移除对手任意一枚棋子后继续）。
 function ggCheckWin() {
-  if (gActive === 'seega') return seega.checkWin(gState.board, gTurn, gState.phase);
-  if (gActive === 'mutorere') return mutorere.checkWin(gState, gTurn);
-  if (gActive === 'konane') return konane.checkWin(gState, gTurn);
+  if (gActive === 'seega') return seega.checkWin(gState.board, gTurn === 1 ? 2 : 1, gState.phase);
+  if (gActive === 'mutorere') return mutorere.checkWin(
+    gState,
+    gTurn === mutorere.PIECE.Black ? mutorere.PIECE.White : mutorere.PIECE.Black
+  );
+  // 跳棋：胜负看「即将行动方」是否无合法跳（此时 gTurn 还是刚走完的一方）
+  if (gActive === 'konane') return konane.checkWin(gState, gTurn === 1 ? 2 : 1);
   if (gActive === 'puluc') return puluc.checkWin(gState);
   return null;
 }
@@ -735,24 +773,27 @@ function pulucPathY(side, n, fromPos, fromDir, homeY) {
 function ggApply(move) {
   let captured = 0;
   if (gActive === 'seega') {
-    const res = seega.applyMove(gState.board, move, gTurn);
-    gState.board = res.board;
-    captured = res.captured;
-    if (move.place) {
-      gState.placed[gTurn]++;
-      gLog.push((gCount + 1) + '. ' + (gTurn === 1 ? '黑' : '白') + ' 放置(' + move.place.r + ',' + move.place.c + ')');
-    } else {
-      gLog.push((gCount + 1) + '. ' + (gTurn === 1 ? '黑' : '白') + ' (' + move.from.r + ',' + move.from.c + ')→(' + move.to.r + ',' + move.to.c + ')' + (res.captured > 0 ? ' 吃' + res.captured : ''));
+    if (move.remove) {
+      // 无棋可走：移除对手任意一枚棋子（特殊行动，不算移动）
+      startSeegaAnim({ kind: 'remove', side: gTurn, removed: move.remove });
+      return;
     }
-    if (gState.placed[1] >= 12 && gState.placed[2] >= 12) gState.phase = 'move';
+    if (move.place) {
+      // 放置动画：新子淡入
+      startSeegaAnim({ kind: 'place', side: gTurn, to: move.place });
+      return;
+    }
+    // 移动 + 吃子动画
+    startSeegaAnim({ kind: 'move', side: gTurn, from: move.from, to: move.to });
+    return;
   } else if (gActive === 'mutorere') {
     gState = mutorere.applyMove(gState, move);
     const nm = (i) => i === mutorere.CENTER ? '中心' : '点' + i;
     gLog.push((gCount + 1) + '. ' + (gTurn === 1 ? '黑' : '白') + ' ' + nm(move.from) + '→' + nm(move.to));
   } else if (gActive === 'konane') {
-    gState = konane.applyMove(gState, move);
-    captured = move.captures;
-    gLog.push((gCount + 1) + '. ' + (gTurn === 1 ? '黑' : '白') + ' (' + move.from.r + ',' + move.from.c + ')→(' + move.to.r + ',' + move.to.c + ') 吃' + move.captures);
+    // 连跳动画：逐跳移动、逐子吃掉，动画结束后统一结算（见 konaneAnimTick/finishKonaneAnim）
+    startKonaneAnim(move);
+    return;
   } else if (gActive === 'puluc') {
     // 移动动画：堆叠从起点滑到落点（或家区），动画结束后应用状态并切换回合
     // 顺序关键：动画参数必须用「移动前」的 dir 计算——applyMove 浅拷贝共享格子对象，
@@ -845,10 +886,133 @@ function ggSwitchTurn() {
   ggCheckAi();
 }
 
+// 塞伽棋：移除对手一子后，仍是无棋可走的一方自己的回合。
+// 若移除后仍无棋可走，须继续移除（循环直到有棋可走或对手只剩 1 子获胜）。
+function ggSeegaPostRemove() {
+  if (gOver || !gActive || gActive !== 'seega') return;
+  const isAi = (gSide === 1 && gTurn === 2) || (gSide === 2 && gTurn === 1);
+  const hasMoves = seega.moves(gState.board, gTurn).length > 0;
+  gSeegaRemoval = !isAi && !hasMoves; // 玩家且仍无棋可走 → 继续点选移除
+  if (isAi) ggCheckAi(); // AI 回合：无棋可走时 aiMove 会再次返回移除走法
+}
+
+// —— 塞伽棋行棋动画 ——
+// 动画期间不修改 gState.board（保持走子前状态），仅绘制插值；
+// 结束后由 finishSeegaAnim 统一应用状态并结算。
+function startSeegaAnim(a) {
+  gThink = false;
+  gSel = null;
+  gMoves = [];
+  if (a.kind === 'move') {
+    // 预计算吃子坐标（用于绘制吃子动画）：在「移动后、吃子前」的棋盘上算
+    const nb = gState.board.map(row => row.slice());
+    nb[a.from.r][a.from.c] = seega.PIECE.None;
+    nb[a.to.r][a.to.c] = a.side;
+    a.eaten = seega.capturedByMove(nb, a.side, a.to.r, a.to.c);
+  } else {
+    a.eaten = [];
+  }
+  a.t0 = Date.now();
+  a.flyStart = a.t0; // 移动插值基准（eat 阶段 t0 会被重置，flyStart 保持不变）
+  a.phase = 'fly';
+  gSeegaAnim = a;
+  if (a.kind === 'remove') sound.playCapture();
+  else sound.playMove();
+  draw();
+  seegaAnimTick();
+}
+
+function seegaAnimTick() {
+  const a = gSeegaAnim;
+  if (!a) return; // 已被重新开局/退出清掉
+  const now = Date.now();
+  if (a.kind === 'place' && now - a.t0 >= SEEGA_PLACE_MS) { finishSeegaAnim(); return; }
+  if (a.kind === 'remove' && now - a.t0 >= SEEGA_REMOVE_MS) { finishSeegaAnim(); return; }
+  if (a.kind === 'move') {
+    if (a.phase === 'fly') {
+      if (now - a.t0 >= SEEGA_MOVE_MS) {
+        if (a.eaten.length > 0) {
+          // 落子：被吃子闪烁消失，稍作停顿
+          a.phase = 'eat';
+          a.t0 = now;
+          sound.playCapture();
+        } else {
+          finishSeegaAnim();
+          return;
+        }
+      }
+    } else if (now - a.t0 >= SEEGA_EAT_MS) {
+      finishSeegaAnim();
+      return;
+    }
+  }
+  draw();
+  setTimeout(seegaAnimTick, 33);
+}
+
+function finishSeegaAnim() {
+  const a = gSeegaAnim;
+  gSeegaAnim = null;
+  if (!a) return;
+  if (gActive !== 'seega' || gOver) { draw(); return; }
+  const side = a.side;
+  let captured = 0;
+  if (a.kind === 'place') {
+    const res = seega.applyMove(gState.board, { place: a.to }, side);
+    gState.board = res.board;
+    gState.placed[side]++;
+    gLog.push((gCount + 1) + '. ' + (side === 1 ? '黑' : '白') + ' 放置(' + a.to.r + ',' + a.to.c + ')');
+    if (gState.placed[1] >= 12 && gState.placed[2] >= 12) gState.phase = 'move';
+  } else if (a.kind === 'move') {
+    const res = seega.applyMove(gState.board, { from: a.from, to: a.to }, side);
+    gState.board = res.board;
+    captured = res.captured;
+    gLog.push((gCount + 1) + '. ' + (side === 1 ? '黑' : '白') + ' (' + a.from.r + ',' + a.from.c + ')→(' + a.to.r + ',' + a.to.c + ')' + (captured > 0 ? ' 吃' + captured : ''));
+  } else {
+    const res = seega.applyRemove(gState.board, a.removed);
+    gState.board = res.board;
+    gSeegaRemoval = false;
+    gLog.push((gCount + 1) + '. ' + (side === 1 ? '黑' : '白') + ' 移除对手子(' + a.removed.r + ',' + a.removed.c + ')');
+  }
+  gCount++;
+  gSel = null;
+  gMoves = [];
+  const win = ggCheckWin();
+  if (win) {
+    gOver = true;
+    gWinner = (win === 1) ? '黑方胜利！' : '白方胜利！';
+    sound.playWin();
+  } else if (gCount >= 300) {
+    gOver = true;
+    gWinner = '平局（步数上限）';
+  } else if (a.kind === 'remove') {
+    ggSeegaPostRemove(); // 移除后仍是无棋可走方自己的回合
+  } else {
+    ggSwitchTurn();
+  }
+  draw();
+}
+
 // AI 回合调度
 function ggCheckAi() {
   if (gOver || !gActive) return;
+  if (gActive === 'konane' && gKonanePhase === 'remove') {
+    // 开局移除阶段：1=黑移除 2=白移除（与 gTurn 无关）
+    const isAi = (gKonaneStep === 1) ? (gSide === 2) : (gSide === 1);
+    if (isAi) {
+      gThink = true;
+      draw();
+      setTimeout(() => ggExecAi(), 350);
+    } else {
+      gThink = false;
+    }
+    return;
+  }
   const isAi = (gSide === 1 && gTurn === 2) || (gSide === 2 && gTurn === 1);
+  if (gActive === 'seega' && gState.phase === 'move') {
+    // 塞伽棋：轮到玩家且无棋可走 → 进入「移除对手一子」状态
+    gSeegaRemoval = !isAi && seega.moves(gState.board, gTurn).length === 0;
+  }
   if (isAi) {
     gThink = true;
     draw();
@@ -860,6 +1024,20 @@ function ggCheckAi() {
 
 function ggExecAi() {
   if (gOver || !gActive || showMenu) return;
+  if (gActive === 'konane' && gKonanePhase === 'remove') {
+    // 开局移除：AI 执黑移除 / 执白移除
+    const side = (gKonaneStep === 1) ? konane.PIECE.Black : konane.PIECE.White;
+    const mv = konaneAi.aiOpeningRemove(gState, side, gKonaneFirst);
+    if (mv) ggKonaneDoRemoval(mv.r, mv.c);
+    else {
+      // 防御：无合法移除时直接进入对局
+      gKonanePhase = 'play';
+      gTurn = konane.PIECE.Black;
+      ggCheckAi();
+      draw();
+    }
+    return;
+  }
   if (gActive === 'puluc') {
     if (gPulucRoll < 0) {
       aiStickThrow(); // AI 也播放掷棍动画
@@ -904,6 +1082,7 @@ function aiStickThrow() {
       gPulucRoll = result;
       gPulucPhase = 'move';
       gStickAnim = null;
+      sound.playMove(); // 与玩家掷棍一致：掷完出点数时播落棍声
       draw(); // 先显示掷出的步数
       // 停顿约 1 秒让玩家看清点数，再继续 AI 走子
       setTimeout(() => {
@@ -929,20 +1108,27 @@ function pulucAnimTick() {
 
 // 玩家触摸：按游戏分发（r, c 为棋盘坐标）
 function onGGTap(r, c) {
-  if (gOver || gThink || !gActive) return;
+  if (gOver || gThink || !gActive || gKonaneAnim || gSeegaAnim) return;
   if (gActive === 'seega') onGgSeegaTap(r, c);
   else if (gActive === 'mutorere') onGgMuTap(r, c);
   else if (gActive === 'konane') onGgKoTap(r, c);
   else if (gActive === 'puluc') onGgPuTap(r, c);
 }
 
-// —— 施嘉：放置 / 选子移动 ——
+// —— 塞伽棋：放置 / 选子移动 / 无棋可走移除 ——
 function onGgSeegaTap(r, c) {
   if (gSide === 2 && gTurn === seega.PIECE.Black) return; // AI 回合
   if (gSide === 1 && gTurn === seega.PIECE.White) return;
   const me = gTurn;
+  if (gSeegaRemoval) {
+    // 无棋可走：必须移除对手任意一枚棋子
+    const p = gState.board[r][c];
+    if (p !== seega.PIECE.None && p !== me) ggApply({ remove: { r, c } });
+    draw();
+    return;
+  }
   if (gState.phase === 'place') {
-    if (gState.board[r][c] === seega.PIECE.None && !seega.isCenterCross(r, c)) {
+    if (gState.board[r][c] === seega.PIECE.None && !seega.isCenter(r, c)) {
       ggApply({ place: { r, c } });
     }
     draw();
@@ -967,21 +1153,27 @@ function onGgSeegaTap(r, c) {
 }
 
 // —— 舞棋：选子移动（点索引 0..8：0-7 外围，8 中心）——
+// 注意：gSel 存的是点索引 0..8，0 是合法选择——判断必须用 `gSel === null`，
+//       不能用 `!gSel`（!0 === true 会把「选中 0 号点」当成「未选中」导致点不过去）
 function onGgMuTap(r, c) {
   const idx = r * 3 + c; // 9 点网格：0..8
   if (gSide === 2 && gTurn === mutorere.PIECE.Black) return;
   if (gSide === 1 && gTurn === mutorere.PIECE.White) return;
   const me = gTurn;
-  if (!gSel) {
-    if (gState[idx] === me) {
-      gSel = idx;
-      gMoves = mutorere.moves(gState, me).filter(m => m.from === idx);
+  const pick = (i) => {
+    const ms = mutorere.moves(gState, me).filter(m => m.from === i);
+    if (ms.length > 0) { gSel = i; gMoves = ms; }
+    else {
+      gSel = null; gMoves = [];
+      wx.showToast({ title: '该子被堵死，无法移动', icon: 'none' });
     }
+  };
+  if (gSel === null) {
+    if (gState[idx] === me) pick(idx);
   } else if (idx === gSel) {
     gSel = null; gMoves = [];
   } else if (gState[idx] === me) {
-    gSel = idx;
-    gMoves = mutorere.moves(gState, me).filter(m => m.from === idx);
+    pick(idx);
   } else {
     const mv = gMoves.find(m => m.to === idx);
     if (mv) ggApply(mv);
@@ -990,8 +1182,133 @@ function onGgMuTap(r, c) {
   draw();
 }
 
+// —— 跳棋：开局移除 ——
+// 应用开局移除并推进阶段：黑移除 → 白移除 → 黑先跳
+function ggKonaneDoRemoval(r, c) {
+  if (gActive !== 'konane' || gKonanePhase !== 'remove') return;
+  gState = konane.applyRemoval(gState, r, c);
+  const sideName = (gKonaneStep === 1) ? '黑' : '白';
+  gLog.push((gCount + 1) + '. 开局：' + sideName + ' 移除(' + r + ',' + c + ')');
+  gCount++;
+  sound.playMove();
+  if (gKonaneStep === 1) {
+    gKonaneFirst = { r, c };
+    gKonaneStep = 2;
+  } else {
+    gKonanePhase = 'play';
+  }
+  gSel = null;
+  gMoves = [];
+  gKonaneConfirm = null;
+  if (gKonanePhase === 'remove') {
+    ggCheckAi(); // 轮到白方移除（若白为 AI 则自动执行）
+  } else {
+    gTurn = konane.PIECE.Black;
+    ggCheckAi(); // 移除完毕，黑方先跳（若黑为 AI 则自动走子）
+  }
+  draw();
+}
+
+// —— 跳棋：连跳动画 ——
+// 逐跳移动（fly）→ 落子吃子停顿（eat）→ 下一跳 / 结束；
+// 动画期间不修改棋盘状态，结束后由 finishKonaneAnim 统一结算
+function startKonaneAnim(move) {
+  gThink = false;
+  gSel = null;
+  gMoves = [];
+  sound.playMove();
+  gKonaneAnim = { move, side: gTurn, step: 0, phase: 'fly', t0: Date.now(), dur: KONANE_FLY_MS };
+  draw();
+  konaneAnimTick();
+}
+
+function konaneAnimTick() {
+  const a = gKonaneAnim;
+  if (!a) return; // 已被重新开局/退出清掉
+  const now = Date.now();
+  if (now - a.t0 >= a.dur) {
+    if (a.phase === 'fly') {
+      // 落点：吃掉当前跳越的敌子，稍作停顿
+      a.phase = 'eat';
+      a.t0 = now;
+      a.dur = KONANE_EAT_MS;
+      sound.playCapture();
+    } else {
+      // 吃子完成：进入下一跳或结束
+      if (a.step < a.move.path.length - 1) {
+        a.step++;
+        a.phase = 'fly';
+        a.t0 = now;
+        a.dur = KONANE_FLY_MS;
+      } else {
+        finishKonaneAnim();
+        return;
+      }
+    }
+  }
+  draw();
+  setTimeout(konaneAnimTick, 33);
+}
+
+function finishKonaneAnim() {
+  const a = gKonaneAnim;
+  const move = a.move;
+  gKonaneAnim = null;
+  gState = konane.applyMove(gState, move);
+  gLog.push((gCount + 1) + '. ' + (gTurn === 1 ? '黑' : '白') + ' (' + move.from.r + ',' + move.from.c + ')→(' + move.to.r + ',' + move.to.c + ') 吃' + move.captures);
+  gCount++;
+  gSel = null;
+  gMoves = [];
+  const win = ggCheckWin();
+  if (win) {
+    gOver = true;
+    gWinner = (win === 1) ? '黑方胜利！' : '白方胜利！';
+    sound.playWin();
+  } else if (gCount >= 300) {
+    gOver = true;
+    gWinner = '平局（步数上限）';
+  } else {
+    ggSwitchTurn();
+  }
+  draw();
+}
+
+// —— 跳棋：开局移除确认弹窗 ——
+function drawGgKonaneConfirm() {
+  drawOverlay();
+  const bw = Math.min(W - 48, 320);
+  const bh = 176;
+  const bx = (W - bw) / 2;
+  const by = (H - bh) / 2;
+  fillRoundRect(bx, by, bw, bh, 14, C.parchment);
+  drawText('确定移除这颗棋子？', bx + bw / 2, by + 44, C.parchmentTitle, 17, 'center', 'middle');
+  drawText('开局阶段：双方各移除 1 枚棋子', bx + bw / 2, by + 74, C.parchmentText, 12, 'center', 'middle');
+  const gap = 12;
+  const btnW = (bw - 48 - gap) / 2;
+  const btnH = 42;
+  const btnY = by + bh - btnH - 18;
+  fillRoundRect(bx + 24, btnY, btnW, btnH, 20, '#8a5a44');
+  drawText('取消', bx + 24 + btnW / 2, btnY + btnH / 2, '#ffffff', 15, 'center', 'middle');
+  gModal.push({ id: 'ko-cancel', x: bx + 24, y: btnY, w: btnW, h: btnH });
+  fillRoundRect(bx + 24 + btnW + gap, btnY, btnW, btnH, 20, '#2d6a4f');
+  drawText('确定', bx + 24 + btnW + gap + btnW / 2, btnY + btnH / 2, '#ffffff', 15, 'center', 'middle');
+  gModal.push({ id: 'ko-confirm', x: bx + 24 + btnW + gap, y: btnY, w: btnW, h: btnH });
+}
+
 // —— 跳棋：选子 → 连跳目标 ——
 function onGgKoTap(r, c) {
+  if (gActive === 'konane' && gKonanePhase === 'remove') {
+    // 开局移除：轮到玩家时点选合法棋子（先弹确认框，确认后才移除）
+    const isAiTurn = (gKonaneStep === 1) ? (gSide === 2) : (gSide === 1);
+    if (isAiTurn) return;
+    const me = (gKonaneStep === 1) ? konane.PIECE.Black : konane.PIECE.White;
+    const legal = (gKonaneStep === 1)
+      ? konane.openingCandidates(gState, me)
+      : konane.secondRemovalChoices(gState, me, gKonaneFirst);
+    if (legal.some(p => p.r === r && p.c === c)) gKonaneConfirm = { r, c };
+    draw();
+    return;
+  }
   if (gSide === 2 && gTurn === konane.PIECE.Black) return;
   if (gSide === 1 && gTurn === konane.PIECE.White) return;
   const me = gTurn;
@@ -1418,7 +1735,7 @@ function drawWolfSheep() {
   drawText('狼羊棋', W / 2, SAFE_TOP + TITLE_H / 2, C.text, 22, 'center', 'middle');
   drawText('‹ 菜单', 14, SAFE_TOP + TITLE_H / 2, C.gold, 15, 'left', 'middle');
 
-  // 状态行
+  // 状态行（只显示回合/阶段信息，已吃羊数在棋盘下方指示行实时显示）
   let status = '';
   let statusColor = C.dim;
   if (wsThinking) {
@@ -1432,10 +1749,10 @@ function drawWolfSheep() {
   } else {
     status = '羊方回合' + (ws.phase === 'place' ? '（放置 ' + ws.placed + '/20）' : '（移动）');
   }
-  status += ' · 已吃羊 ' + ws.captured + '/5';
   drawText(status, W / 2, SAFE_TOP + TITLE_H + STATUS_H / 2, statusColor, 14, 'center', 'middle');
 
   drawWsBoard();
+  drawWsCaptured();
   drawWsToggle(wsButtons[0]);
   for (let i = 1; i < wsButtons.length; i++) drawButton(wsButtons[i]);
 
@@ -1443,6 +1760,30 @@ function drawWolfSheep() {
   wsModalButtons = [];
   if (wsGameOver) drawWsGameOverModal();
   else if (wsShowRules) drawWsRulesModal();
+}
+
+// 已吃羊指示行：标签 + 5 个槽位（被吃 = 白色实心羊，未吃 = 空心圈）+ 计数，每帧实时刷新
+function drawWsCaptured() {
+  const y = wsLayout.by + wsLayout.cell * 4 + 24 + WS_CAP_H / 2;
+  const slotStep = 18, slotR = 7;
+  const labelW = 50, countW = 42;
+  const totalW = labelW + 4 * slotStep + slotR * 2 + countW;
+  let x = W / 2 - totalW / 2;
+  drawText('已吃羊', x, y, C.parchment, 13, 'left', 'middle');
+  x += labelW;
+  for (let i = 0; i < 5; i++) {
+    const cx = x + i * slotStep + slotR;
+    if (i < ws.captured) {
+      ctx.beginPath(); ctx.arc(cx, y, slotR, 0, Math.PI * 2);
+      ctx.fillStyle = C.defender; ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1; ctx.stroke();
+    } else {
+      ctx.beginPath(); ctx.arc(cx, y, slotR, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(245,245,245,0.55)'; ctx.lineWidth = 1.5; ctx.stroke();
+    }
+  }
+  x += 4 * slotStep + slotR * 2 + 6;
+  drawText(ws.captured + '/5', x, y, C.gold, 13, 'left', 'middle');
 }
 
 function drawWsBoard() {
@@ -1606,6 +1947,25 @@ function drawGG() {
   } else if (gOver) {
     status = '对局结束';
     statusColor = C.dim;
+  } else if (gActive === 'seega' && gSeegaAnim) {
+    if (gSeegaAnim.kind === 'place') status = '放置中…';
+    else if (gSeegaAnim.kind === 'remove') status = '移除对手子中…';
+    else status = (gSeegaAnim.side === 1 ? '黑方' : '白方') + ' 移动中…';
+    statusColor = C.gold;
+  } else if (gActive === 'seega' && gSeegaRemoval) {
+    status = '你无棋可走：请点选对手一枚棋子移除';
+    statusColor = '#e05a3a';
+  } else if (gActive === 'konane' && gKonanePhase === 'remove') {
+    if (gKonaneStep === 1) {
+      status = (gSide === 2) ? '黑方移除开局棋子…' : '开局：请移除一枚四角或中央的己方棋子';
+    } else {
+      const centerRule = !!gKonaneFirst && konane.isCenter4(gKonaneFirst.r, gKonaneFirst.c);
+      status = (gSide === 1) ? '白方移除开局棋子…' : ('开局：请移除一枚与空位相邻的棋子' + (centerRule ? '（须在中央四格内）' : ''));
+    }
+    statusColor = '#e05a3a';
+  } else if (gKonaneAnim) {
+    status = (gKonaneAnim.side === 1 ? '黑方' : '白方') + ' 跳吃中…';
+    statusColor = C.gold;
   } else {
     status = (gTurn === 1 ? '黑方回合' : '白方回合');
     if (gActive === 'seega' && gState.phase === 'place') status += '（放置 ' + gState.placed[1] + '/' + gState.placed[2] + '）';
@@ -1640,6 +2000,7 @@ function drawGG() {
   if (gOver) drawGgGameOverModal();
   else if (gShowRules) drawGgRulesModal();
   else if (gShowLog) drawGgLogModal();
+  else if (gKonaneConfirm) drawGgKonaneConfirm();
 }
 
 function drawGgPiece(cx, cy, rad, color, sel) {
@@ -1658,7 +2019,7 @@ function drawGgPiece(cx, cy, rad, color, sel) {
   ctx.stroke();
 }
 
-// 施嘉：5×5 方格
+// 塞伽棋：5×5 方格（仅中心格特殊样式）
 function drawGgSeega() {
   const size = gLayout.size, cell = size / 5;
   const bx = gLayout.bx, by = gLayout.by;
@@ -1666,8 +2027,8 @@ function drawGgSeega() {
   for (let r = 0; r < 5; r++) {
     for (let c = 0; c < 5; c++) {
       const x = bx + c * cell, y = by + r * cell;
-      fillRoundRect(x + 1, y + 1, cell - 2, cell - 2, 3, seega.isCenterCross(r, c) ? C.throne : C.cell);
-      if (seega.isCenterCross(r, c)) {
+      fillRoundRect(x + 1, y + 1, cell - 2, cell - 2, 3, seega.isCenter(r, c) ? C.throne : C.cell);
+      if (seega.isCenter(r, c)) {
         ctx.fillStyle = C.gold;
         ctx.beginPath();
         ctx.arc(x + cell / 2, y + cell / 2, cell * 0.12, 0, Math.PI * 2);
@@ -1675,16 +2036,29 @@ function drawGgSeega() {
       }
     }
   }
-  // 放置阶段可放点提示
-  if (!gOver && !gThink && gState.phase === 'place') {
+  const anim = gSeegaAnim;
+  const cx = (c) => bx + c * cell + cell / 2;
+  const cy = (r) => by + r * cell + cell / 2;
+  // 动画中被隐藏的棋子位置（移动源格、被吃子、被移除子）
+  const hideSet = new Set();
+  if (anim) {
+    if (anim.kind === 'move') {
+      hideSet.add(anim.from.r + ',' + anim.from.c);
+      if (anim.phase === 'eat') for (const e of anim.eaten) hideSet.add(e.r + ',' + e.c);
+    } else if (anim.kind === 'remove') {
+      hideSet.add(anim.removed.r + ',' + anim.removed.c);
+    }
+  }
+  // 放置阶段可放点提示（动画中不提示）
+  if (!gOver && !gThink && !anim && gState.phase === 'place') {
     const playerTurn = (gSide === 1 && gTurn === 1) || (gSide === 2 && gTurn === 2);
     if (playerTurn) {
       ctx.fillStyle = 'rgba(240, 192, 96, 0.5)';
       for (let r = 0; r < 5; r++) {
         for (let c = 0; c < 5; c++) {
-          if (gState.board[r][c] === seega.PIECE.None && !seega.isCenterCross(r, c)) {
+          if (gState.board[r][c] === seega.PIECE.None && !seega.isCenter(r, c)) {
             ctx.beginPath();
-            ctx.arc(bx + c * cell + cell / 2, by + r * cell + cell / 2, 5, 0, Math.PI * 2);
+            ctx.arc(cx(c), cy(r), 5, 0, Math.PI * 2);
             ctx.fill();
           }
         }
@@ -1696,19 +2070,71 @@ function drawGgSeega() {
     ctx.fillStyle = 'rgba(240, 192, 96, 0.8)';
     for (const m of gMoves) {
       ctx.beginPath();
-      ctx.arc(bx + m.to.c * cell + cell / 2, by + m.to.r * cell + cell / 2, 6, 0, Math.PI * 2);
+      ctx.arc(cx(m.to.c), cy(m.to.r), 6, 0, Math.PI * 2);
       ctx.fill();
     }
   }
-  // 棋子
+  // 无棋可走移除模式：高亮对手棋子供点选
+  if (gSeegaRemoval) {
+    ctx.strokeStyle = '#e05a3a';
+    ctx.lineWidth = 3;
+    for (let r = 0; r < 5; r++) {
+      for (let c = 0; c < 5; c++) {
+        const p = gState.board[r][c];
+        if (p === seega.PIECE.None || p === gTurn) continue;
+        ctx.beginPath();
+        ctx.arc(cx(c), cy(r), cell * 0.46, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+  }
+  // 棋子（隐藏动画涉及的格子）
   for (let r = 0; r < 5; r++) {
     for (let c = 0; c < 5; c++) {
+      if (hideSet.has(r + ',' + c)) continue;
       const p = gState.board[r][c];
       if (p === seega.PIECE.None) continue;
-      const cx = bx + c * cell + cell / 2, cy = by + r * cell + cell / 2;
       const sel = !!(gSel && gSel.r === r && gSel.c === c);
-      if (p === seega.PIECE.Black) drawGgPiece(cx, cy, cell * 0.38, C.attacker, sel);
-      else drawGgPiece(cx, cy, cell * 0.38, C.defender, sel);
+      if (p === seega.PIECE.Black) drawGgPiece(cx(c), cy(r), cell * 0.38, C.attacker, sel);
+      else drawGgPiece(cx(c), cy(r), cell * 0.38, C.defender, sel);
+    }
+  }
+  // 行棋动画层
+  if (anim) {
+    const now = Date.now();
+    const ease = (t) => 1 - Math.pow(1 - t, 3); // easeOutCubic
+    if (anim.kind === 'place') {
+      const t = ease(Math.min(1, (now - anim.t0) / SEEGA_PLACE_MS));
+      const rad = cell * 0.38 * (0.2 + 0.8 * t);
+      ctx.globalAlpha = t;
+      drawGgPiece(cx(anim.to.c), cy(anim.to.r), rad, anim.side === 1 ? C.attacker : C.defender, false);
+      ctx.globalAlpha = 1;
+    } else if (anim.kind === 'move') {
+      // 移动插值用 flyStart（进入 eat 阶段后 t0 被重置为吃子开始时间，不能用于插值）
+      const t = ease(Math.min(1, (now - anim.flyStart) / SEEGA_MOVE_MS));
+      const x = cx(anim.from.c) + (cx(anim.to.c) - cx(anim.from.c)) * t;
+      const y = cy(anim.from.r) + (cy(anim.to.r) - cy(anim.from.r)) * t;
+      drawGgPiece(x, y, cell * 0.38, anim.side === 1 ? C.attacker : C.defender, false);
+      if (anim.phase === 'eat') {
+        // 被吃子闪烁消失
+        const et = Math.min(1, (now - anim.t0) / SEEGA_EAT_MS);
+        ctx.globalAlpha = 1 - et;
+        for (const e of anim.eaten) {
+          drawGgPiece(cx(e.c), cy(e.r), cell * 0.38, anim.side === 1 ? C.defender : C.attacker, false);
+        }
+        ctx.globalAlpha = 1;
+      }
+    } else if (anim.kind === 'remove') {
+      // 被移除子淡出 + 红圈警示
+      const t = Math.min(1, (now - anim.t0) / SEEGA_REMOVE_MS);
+      ctx.globalAlpha = 1 - t;
+      drawGgPiece(cx(anim.removed.c), cy(anim.removed.r), cell * 0.38, anim.side === 1 ? C.defender : C.attacker, false);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = '#e05a3a';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(cx(anim.removed.c), cy(anim.removed.r), cell * 0.46, 0, Math.PI * 2);
+      ctx.stroke();
     }
   }
 }
@@ -1751,13 +2177,13 @@ function drawGgMu() {
   }
 }
 
-// 跳棋：8×8 方格
+// 跳棋：6×6 方格
 function drawGgKonane() {
-  const size = gLayout.size, cell = size / 8;
+  const size = gLayout.size, cell = size / 6;
   const bx = gLayout.bx, by = gLayout.by;
   fillRoundRect(bx - 6, by - 6, size + 12, size + 12, 10, C.boardBg);
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
+  for (let r = 0; r < 6; r++) {
+    for (let c = 0; c < 6; c++) {
       const x = bx + c * cell, y = by + r * cell;
       fillRoundRect(x + 1, y + 1, cell - 2, cell - 2, 2, ((r + c) % 2 === 0) ? C.cell : '#b9884f');
     }
@@ -1771,16 +2197,60 @@ function drawGgKonane() {
       ctx.fill();
     }
   }
-  // 棋子
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
+  // 开局移除提示：轮到玩家移除时高亮可移除的棋子
+  if (gKonanePhase === 'remove' && !gThink) {
+    const humanTurn = (gKonaneStep === 1) ? (gSide === 1) : (gSide === 2);
+    if (humanTurn) {
+      const legal = (gKonaneStep === 1)
+        ? konane.openingCandidates(gState, konane.PIECE.Black)
+        : konane.secondRemovalChoices(gState, konane.PIECE.White, gKonaneFirst);
+      ctx.fillStyle = 'rgba(240, 192, 96, 0.85)';
+      for (const m of legal) {
+        ctx.beginPath();
+        ctx.arc(bx + m.c * cell + cell / 2, by + m.r * cell + cell / 2, 8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+  // 棋子（动画中：移动中的子不画在原位，被吃掉的子按顺序消失）
+  const anim = gKonaneAnim;
+  const eaten = new Set();
+  let animPos = null;
+  if (anim) {
+    const mv = anim.move;
+    for (let i = 0; i < anim.step; i++) eaten.add(mv.path[i].captured.r + ',' + mv.path[i].captured.c);
+    if (anim.phase === 'eat') eaten.add(mv.path[anim.step].captured.r + ',' + mv.path[anim.step].captured.c);
+    // 移动中的棋子当前位置（插值 + 缓动）
+    let fr, to;
+    if (anim.phase === 'fly') {
+      fr = (anim.step === 0) ? mv.from : mv.path[anim.step - 1];
+      to = mv.path[anim.step];
+    } else {
+      fr = to = mv.path[anim.step];
+    }
+    const t = Math.min(1, (Date.now() - anim.t0) / anim.dur);
+    const e = t * t * (3 - 2 * t);
+    animPos = {
+      x: bx + (fr.c + (to.c - fr.c) * e) * cell + cell / 2,
+      y: by + (fr.r + (to.r - fr.r) * e) * cell + cell / 2,
+      side: anim.side
+    };
+  }
+  for (let r = 0; r < 6; r++) {
+    for (let c = 0; c < 6; c++) {
       const p = gState[r][c];
       if (p === konane.PIECE.None) continue;
+      if (anim && r === anim.move.from.r && c === anim.move.from.c) continue;
+      if (anim && eaten.has(r + ',' + c)) continue;
       const cx = bx + c * cell + cell / 2, cy = by + r * cell + cell / 2;
       const sel = !!(gSel && gSel.r === r && gSel.c === c);
       if (p === konane.PIECE.Black) drawGgPiece(cx, cy, cell * 0.38, C.attacker, sel);
       else drawGgPiece(cx, cy, cell * 0.38, C.defender, sel);
     }
+  }
+  // 移动中的棋子画在最上层
+  if (animPos) {
+    drawGgPiece(animPos.x, animPos.y, cell * 0.38, (animPos.side === konane.PIECE.Black) ? C.attacker : C.defender, false);
   }
 }
 
@@ -2264,7 +2734,7 @@ function handleTap(x, y) {
           enterWolfSheep(); // 狼羊棋（尼泊尔虎棋）
         } else {
           const ggKey = ['', '', '', 'seega', 'mutorere', 'konane', 'puluc'][b.gameId];
-          enterGG(ggKey); // 施嘉/舞棋/跳棋/普鲁克
+          enterGG(ggKey); // 塞伽棋/舞棋/跳棋/普鲁克
         }
         return;
       }
@@ -2274,6 +2744,23 @@ function handleTap(x, y) {
 
   // 四款新棋页面
   if (gActive) {
+    // 跳棋开局移除确认弹窗优先
+    if (gKonaneConfirm) {
+      for (const b of gModal) {
+        if (hitTest(b, x, y)) {
+          if (b.id === 'ko-confirm') {
+            const pos = gKonaneConfirm;
+            gKonaneConfirm = null;
+            ggKonaneDoRemoval(pos.r, pos.c);
+          } else if (b.id === 'ko-cancel') {
+            gKonaneConfirm = null;
+            draw();
+          }
+          return;
+        }
+      }
+      return; // 确认弹窗打开时忽略其它点击
+    }
     // 弹窗优先
     if (gOver) {
       for (const b of gModal) {
@@ -2363,9 +2850,9 @@ function handleTap(x, y) {
       }
       return;
     }
-    // 方格类：施嘉 5×5 / 跳棋 8×8
+    // 方格类：塞伽棋 5×5 / 跳棋 6×6
     const size = gLayout.size, bx = gLayout.bx, by = gLayout.by;
-    const n = (gActive === 'seega') ? 5 : 8;
+    const n = (gActive === 'seega') ? 5 : (gActive === 'konane') ? 6 : 8;
     const cell = size / n;
     if (x >= bx && x <= bx + size && y >= by && y <= by + size) {
       const c = Math.floor((x - bx) / cell);

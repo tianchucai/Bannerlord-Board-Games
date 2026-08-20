@@ -1,15 +1,20 @@
-// 施嘉（Seega 埃及夹棋）：纯数据规则 + 贪心 AI
-// 规则：5×5 棋盘，中央十字(中心+上下左右共5格)开局为空且放置阶段禁用；
-//       双方各 12 子，先轮流放置，放完后移动（水平/垂直一格）；
-//       移动后凡被己方水平/垂直夹住的敌子被吃（中央十字格上的子受保护不可吃）；
-//       吃光对方全部棋子或对方无合法移动者胜。
+// 塞伽棋（Seega 埃及夹棋）：纯数据规则 + 贪心 AI
+// 规则（对齐骑砍二 2026 正式版游戏内弹窗）：
+//   5×5 棋盘，仅中心格特殊：放置阶段禁止落子，移动阶段可走入；
+//   双方各 12 子，先轮流放置，放完后移动（水平/垂直一格，不能斜走）；
+//   移动后，横向或竖向夹住对方「单独一枚」棋子即可吃掉（斜向不算；
+//   只有你移动造成的夹击才算，对方主动走进你的两子中间不会被吃；
+//   两颗连在一起的敌子不能被夹吃）；
+//   轮到某方却无棋可走时，该方必须移除对手任意一枚棋子，然后继续自己的回合；
+//   将对手除 1 枚以外的全部棋子吃掉（对手只剩 1 枚）即获胜。
 
 const SIZE = 5;
 const PIECE = { None: 0, Black: 1, White: 2 };
 const TOTAL = 12;
 
-function isCenterCross(r, c) {
-  return (r === 2 && c === 2) || (Math.abs(r - 2) + Math.abs(c - 2) === 1);
+// 仅中心格（2,2）特殊
+function isCenter(r, c) {
+  return r === 2 && c === 2;
 }
 
 function createEmpty() {
@@ -26,18 +31,18 @@ function count(board, side) {
   return n;
 }
 
-// 放置阶段：非中央十字的空位
+// 放置阶段：非中心格的空位（中心格禁落子）
 function placements(board) {
   const list = [];
   for (let r = 0; r < SIZE; r++) {
     for (let c = 0; c < SIZE; c++) {
-      if (board[r][c] === PIECE.None && !isCenterCross(r, c)) list.push({ place: { r, c } });
+      if (board[r][c] === PIECE.None && !isCenter(r, c)) list.push({ place: { r, c } });
     }
   }
   return list;
 }
 
-// 移动阶段：水平/垂直一格到空位
+// 移动阶段：水平/垂直一格到空位（中心格可走入）
 function moves(board, side) {
   const dirs = [[0, 1], [0, -1], [1, 0], [-1, 0]];
   const list = [];
@@ -55,23 +60,20 @@ function moves(board, side) {
   return list;
 }
 
-// 计算移动后会被夹击吃掉的敌子（中心十字上的敌子受保护）
+// 移动后会被夹吃掉的敌子：仅「紧邻落点 + 隔一格是己方子」的单独一枚敌子可吃。
+// 因此两颗连在一起的敌子无法被夹吃；斜向不算；只检查行棋方（对方走进两子中间不会触发）。
 function capturedByMove(board, side, toR, toC) {
   const dirs = [[0, 1], [0, -1], [1, 0], [-1, 0]];
   const out = [];
+  const inB = (r, c) => r >= 0 && r < SIZE && c >= 0 && c < SIZE;
   for (const d of dirs) {
-    let nr = toR + d[0], nc = toC + d[1];
-    const chain = [];
-    let closed = false;
-    while (nr >= 0 && nr < SIZE && nc >= 0 && nc < SIZE) {
-      const p = board[nr][nc];
-      if (p === PIECE.None) break;
-      if (p === side) { closed = true; break; }
-      if (isCenterCross(nr, nc)) { closed = false; break; } // 中心十字保护
-      chain.push({ r: nr, c: nc });
-      nr += d[0]; nc += d[1];
+    const r1 = toR + d[0], c1 = toC + d[1];
+    const r2 = toR + 2 * d[0], c2 = toC + 2 * d[1];
+    if (inB(r1, c1) && inB(r2, c2) &&
+      board[r1][c1] !== PIECE.None && board[r1][c1] !== side &&
+      board[r2][c2] === side) {
+      out.push({ r: r1, c: c1 });
     }
-    if (closed) out.push(...chain);
   }
   return out;
 }
@@ -91,16 +93,24 @@ function applyMove(board, move, side) {
   return { board: nb, captured };
 }
 
-// 胜负：side 轮到行动；若其子数为 0 或无合法走法则对方胜
+// 无棋可走时的特殊行动：移除对手一枚棋子
+function applyRemove(board, target) {
+  const nb = board.map(row => row.slice());
+  nb[target.r][target.c] = PIECE.None;
+  return { board: nb, captured: 0 };
+}
+
+// 胜负：side 为即将行动的一方；若其棋子数 ≤1（只剩 1 枚）则另一方胜。
+// 放置阶段无胜负（无吃子，子数只增不减）。
 function checkWin(board, side, phase) {
+  if (phase === 'place') return null;
   const opp = side === PIECE.Black ? PIECE.White : PIECE.Black;
-  if (count(board, side) === 0) return opp;
-  const legal = (phase === 'place') ? placements(board) : moves(board, side);
-  if (legal.length === 0) return opp;
+  if (count(board, side) <= 1) return opp;
   return null;
 }
 
-// 己方棋子被夹击威胁数（评估用）：某轴两侧都是敌子则受威胁
+// 己方棋子受夹威胁数（评估用）：某轴一侧为空、另一侧为敌子，
+// 敌子可移入该空位形成夹击吃掉此子，则该子受威胁。
 function threatenedCount(board, side) {
   let n = 0;
   const dirs = [[0, 1], [0, -1], [1, 0], [-1, 0]];
@@ -112,9 +122,8 @@ function threatenedCount(board, side) {
         const b = { r: r - d[0], c: c - d[1] };
         const inB = (p) => p.r >= 0 && p.r < SIZE && p.c >= 0 && p.c < SIZE;
         if (inB(a) && inB(b) &&
-          board[a.r][a.c] !== PIECE.None && board[a.r][a.c] !== side &&
-          board[b.r][b.c] !== PIECE.None && board[b.r][b.c] !== side &&
-          !isCenterCross(a.r, a.c) && !isCenterCross(b.r, b.c)) {
+          board[a.r][a.c] === PIECE.None &&
+          board[b.r][b.c] !== PIECE.None && board[b.r][b.c] !== side) {
           n++;
           break;
         }
@@ -127,6 +136,6 @@ function threatenedCount(board, side) {
 // AI 见 seega_ai.js
 
 module.exports = {
-  SIZE, PIECE, TOTAL, isCenterCross, createEmpty, setup, count,
-  placements, moves, capturedByMove, applyMove, checkWin, threatenedCount
+  SIZE, PIECE, TOTAL, isCenter, createEmpty, setup, count,
+  placements, moves, capturedByMove, applyMove, applyRemove, checkWin, threatenedCount
 };
