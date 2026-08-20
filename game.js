@@ -5,10 +5,15 @@ const game = require('./utils/game');
 const ai = require('./utils/ai');
 const sound = require('./utils/sound');
 const wsmod = require('./utils/wolf_sheep');
+const wsai = require('./utils/wolf_sheep_ai');
 const seega = require('./utils/seega');
+const seegaAi = require('./utils/seega_ai');
 const mutorere = require('./utils/mutorere');
+const mutorereAi = require('./utils/mutorere_ai');
 const konane = require('./utils/konane');
+const konaneAi = require('./utils/konane_ai');
 const puluc = require('./utils/puluc');
+const pulucAi = require('./utils/puluc_ai');
 
 const PieceType = game.PieceType;
 const SIZE = game.SIZE;
@@ -226,11 +231,12 @@ const GG_MODS = {
     '轮到某方无合法跳即败。'
   ]},
   puluc: { name: '普鲁克', mod: puluc, rules: [
-    '普鲁克（Puluc 玛雅折返戏）：一条 5 格道路，双方各 5 枚棋子从两端出发。',
-    '掷 4 根两面木棍决定步数（0-4），选一枚棋子：从"家"进场，或已在路上的棋子前进。',
-    '到达远端格 4 后掉头折返，返回途中回到格 0 即离场。',
-    '落点格若有敌子，敌子最上面一枚被捕获送回其"家"。',
-    '先让全部 5 枚棋子离场的一方获胜。'
+    '普鲁克（Puluc 玛雅折返戏）：一条 11 格道路，双方各 6 枚棋子从两端出发。',
+    '掷骰：投掷 4 根双色棍，红面数即步数；0 红（全白）=5 步。',
+    '棋子向对手大本营前进，到达最后一格后折返，向自己本垒返回。',
+    '俘虏：落点有对方棋子时，对方整个堆叠被俘、叠在己方棋子下面，且该堆叠必须掉头往回走（不能再前进）。',
+    '返回本垒：堆叠落在自己本垒时，己方棋子可重新使用，被俘敌子被淘汰出局。',
+    '同色棋子不能叠同一格；对方无可用棋子即获胜。'
   ]}
 };
 
@@ -245,8 +251,14 @@ let gWinner = '';
 let gThink = false;
 let gCount = 0;
 let gShowRules = false;
+let gShowLog = false;
+let gLog = [];       // 行棋日志（字符串数组）
+let gLogTip = '';    // 日志复制反馈
 let gModal = [];
 let gPulucRoll = -1;  // 普鲁克当前掷出的步数（-1 待掷）
+let gPulucPhase = 'roll'; // 'roll' 待掷 / 'anim' 掷棍动画中 / 'move' 选子移动
+let gStickAnim = null;  // 掷棍动画 { start, dur, result }
+let gPulucAnim = null;  // 棋子移动动画 { fromY, toY, pieces, side, fromPos, start, dur, onDone }
 let gLayout = { bx: 0, by: 0, cell: 40, r: 120, cx: 0, cy: 0, road: 44 };
 
 const RULES = [
@@ -311,6 +323,8 @@ function backToMenu() {
   isThinking = false;
   wsThinking = false;
   gThink = false;
+  gStickAnim = null;
+  gPulucAnim = null;
   selected = null;
   movableCells = [];
   anim = null;
@@ -505,8 +519,8 @@ function checkWsAiTurn() {
 function executeWsAiMove() {
   if (!ws || wsGameOver || showMenu || !wsActive) return;
   let move = null;
-  if (ws.turn === wsmod.PIECE.Wolf) move = wsmod.wolfAiMove(ws.board);
-  else move = wsmod.sheepAiMove(ws.board, ws.placed);
+  if (ws.turn === wsmod.PIECE.Wolf) move = wsai.wolfAiMove(ws.board);
+  else move = wsai.sheepAiMove(ws.board, ws.placed);
   if (move) {
     applyWsMove(move);
   } else {
@@ -611,11 +625,16 @@ function computeGgLayout() {
   gLayout.size = size;
   gLayout.bx = (W - size) / 2;
   gLayout.by = SAFE_TOP + TITLE_H + STATUS_H + 10;
-  gLayout.cell = size / 8; // 8×8（跳棋）用满；5×5（施嘉）和路（普鲁克）按需缩放
+  gLayout.cell = size / 8; // 8×8（跳棋）用满；5×5（施嘉）按需缩放
   gLayout.cx = W / 2;
   gLayout.cy = gLayout.by + size / 2;
   gLayout.r = size / 2 - 10; // 舞棋星盘半径
-  gLayout.road = Math.min(64, (W - 80) / 5);
+  // 普鲁克竖版：上下两端家区 + 中间 11 格纵向道路（格宽大幅加宽，棋子一行排开）
+  gLayout.homeH = 46;
+  gLayout.pulucRoad = Math.max(20, Math.min(34, Math.floor((H - SAFE_TOP - TITLE_H - STATUS_H - BTN_AREA_H - gLayout.homeH * 2 - 110) / 11)));
+  gLayout.pulucW = Math.min(180, W - 48); // 格宽：横向 2.5 倍（约 180px）
+  gLayout.pulucX = (W - gLayout.pulucW) / 2;
+  gLayout.pulucY = SAFE_TOP + TITLE_H + STATUS_H + 8;
 }
 
 // 进入某款棋（id: 3-6 对应 GAMES）
@@ -640,29 +659,34 @@ function startGG() {
   } else if (gActive === 'puluc') {
     gState = puluc.createState();
     gTurn = puluc.PIECE.Black;
-    gPulucRoll = puluc.roll(); // 自动掷骰
-    gPulucPhase = 'move';
+    gPulucRoll = -1;      // 等待玩家/AI 掷棍
+    gPulucPhase = 'roll';
   }
   gSel = null;
   gMoves = [];
-  if (gActive === 'puluc') gMoves = puluc.moves(gState, gTurn, gPulucRoll);
+  if (gActive === 'puluc') gMoves = [];
   gOver = false;
   gWinner = '';
   gThink = false;
   gCount = 0;
   gShowRules = false;
+  gShowLog = false;
+  gLog = [];
+  gLogTip = '';
+  gStickAnim = null;
+  gPulucAnim = null;
   ggCheckAi();
   draw();
 }
 
 // 各游戏 AI 走法
 function ggAiMove() {
-  if (gActive === 'seega') return seega.aiMove(gState.board, gTurn, gState.phase);
-  if (gActive === 'mutorere') return mutorere.aiMove(gState, gTurn);
-  if (gActive === 'konane') return konane.aiMove(gState, gTurn);
+  if (gActive === 'seega') return seegaAi.aiMove(gState.board, gTurn, gState.phase);
+  if (gActive === 'mutorere') return mutorereAi.aiMove(gState, gTurn);
+  if (gActive === 'konane') return konaneAi.aiMove(gState, gTurn);
   if (gActive === 'puluc') {
     if (gPulucRoll < 0) gPulucRoll = puluc.roll();
-    return puluc.aiMove(gState, gTurn, gPulucRoll);
+    return pulucAi.aiMove(gState, gTurn, gPulucRoll);
   }
   return null;
 }
@@ -683,19 +707,82 @@ function ggApply(move) {
     const res = seega.applyMove(gState.board, move, gTurn);
     gState.board = res.board;
     captured = res.captured;
-    if (move.place) gState.placed[gTurn]++;
+    if (move.place) {
+      gState.placed[gTurn]++;
+      gLog.push((gCount + 1) + '. ' + (gTurn === 1 ? '黑' : '白') + ' 放置(' + move.place.r + ',' + move.place.c + ')');
+    } else {
+      gLog.push((gCount + 1) + '. ' + (gTurn === 1 ? '黑' : '白') + ' (' + move.from.r + ',' + move.from.c + ')→(' + move.to.r + ',' + move.to.c + ')' + (res.captured > 0 ? ' 吃' + res.captured : ''));
+    }
     if (gState.placed[1] >= 12 && gState.placed[2] >= 12) gState.phase = 'move';
   } else if (gActive === 'mutorere') {
     gState = mutorere.applyMove(gState, move);
+    const nm = (i) => i === mutorere.CENTER ? '中心' : '点' + i;
+    gLog.push((gCount + 1) + '. ' + (gTurn === 1 ? '黑' : '白') + ' ' + nm(move.from) + '→' + nm(move.to));
   } else if (gActive === 'konane') {
     gState = konane.applyMove(gState, move);
     captured = move.captures;
+    gLog.push((gCount + 1) + '. ' + (gTurn === 1 ? '黑' : '白') + ' (' + move.from.r + ',' + move.from.c + ')→(' + move.to.r + ',' + move.to.c + ') 吃' + move.captures);
   } else if (gActive === 'puluc') {
+    // 移动动画：堆叠从起点滑到落点（或家区），动画结束后应用状态并切换回合
+    // 顺序关键：动画参数必须用「移动前」的 dir 计算——applyMove 浅拷贝共享格子对象，
+    // 俘虏/远端折返时会原地翻转 dir，若先 applyMove 再取 dir，动画会朝反方向滑（抽动）。
+    const road = gLayout.pulucRoad, homeH = gLayout.homeH, y0 = gLayout.pulucY;
+    const homeY = (gTurn === 1) ? y0 + homeH / 2 : y0 + homeH + puluc.CELLS * road + homeH / 2;
+    const fromCell = (move.kind === 'enter') ? null : gState.cells[move.pos];
+    const pieces = move.kind === 'enter' ? [gTurn] : (fromCell ? fromCell.captives.slice().concat([fromCell.side]) : [gTurn]);
+    let fromY = (move.kind === 'enter') ? homeY : y0 + homeH + move.pos * road + road / 2;
+    const land = (move.kind === 'enter') ? puluc.enterLanding(gTurn, gPulucRoll) : puluc.landing(move.pos, fromCell.dir, gPulucRoll, gTurn);
+    const toY = land.homeReturn ? homeY : y0 + homeH + land.p * road + road / 2;
     const res = puluc.applyMove(gState, move, gTurn, gPulucRoll);
-    gState = res.state;
-    captured = res.captured;
-    gPulucRoll = -1;
-    gPulucPhase = 'roll';
+    if (!res) {
+      // 防御：异常时不冻结——按本轮无子可动处理（轮空换边，解除思考锁）
+      ggSwitchTurn();
+      draw();
+      return;
+    }
+    gSel = null;
+    gMoves = [];
+    // 移动前落点的对方堆叠（判断夺回数）
+    const targetBefore = (move.kind === 'enter' || !land.homeReturn) ? gState.cells[land.p] : null;
+    // 行棋日志：进场写落点、俘虏注明夺回
+    let desc;
+    if (move.kind === 'enter') desc = (gTurn === 1 ? '黑' : '白') + ' 掷' + gPulucRoll + ' 进场→格' + land.p;
+    else if (land.homeReturn) desc = (gTurn === 1 ? '黑' : '白') + ' 掷' + gPulucRoll + ' 回家';
+    else desc = (gTurn === 1 ? '黑' : '白') + ' 掷' + gPulucRoll + ' 格' + move.pos + '→格' + land.p;
+    if (res.captured > 0) {
+      const recaptured = (targetBefore && targetBefore.captives) ? targetBefore.captives.length : 0;
+      desc += ' 俘虏' + res.captured + (recaptured > 0 ? '（夺回' + recaptured + '）' : '');
+    }
+    if (res.captured > 0) sound.playCapture();
+    else sound.playMove();
+    gPulucAnim = {
+      fromY, toY, pieces, side: gTurn,
+      fromPos: move.kind === 'enter' ? null : move.pos,
+      toPos: land.homeReturn ? null : land.p,
+      start: Date.now(), dur: 380,
+      onDone: () => {
+        gState = res.state;
+        gPulucRoll = -1;
+        gPulucPhase = 'roll';
+        gCount++;
+        gLog.push(gCount + '. ' + desc);
+        const win = ggCheckWin();
+        if (win) {
+          gOver = true;
+          gWinner = (win === 1) ? '黑方胜利！' : '白方胜利！';
+          sound.playWin();
+        } else if (gCount >= 300) {
+          gOver = true;
+          gWinner = '平局（步数上限）';
+        } else {
+          ggSwitchTurn();
+        }
+        draw();
+      }
+    };
+    draw();
+    pulucAnimTick();
+    return; // 跳过公共尾部（动画完成后统一结算）
   }
   gCount++;
   gSel = null;
@@ -719,9 +806,10 @@ function ggApply(move) {
 
 function ggSwitchTurn() {
   gTurn = (gTurn === 1) ? 2 : 1;
-  if (gActive === 'puluc' && gPulucRoll < 0) {
-    gPulucRoll = puluc.roll(); // 回合开始自动掷骰
-    gPulucPhase = 'move';
+  if (gActive === 'puluc') {
+    gPulucRoll = -1;      // 新回合重新掷棍
+    gPulucPhase = 'roll';
+    gMoves = [];
   }
   ggCheckAi();
 }
@@ -741,7 +829,22 @@ function ggCheckAi() {
 
 function ggExecAi() {
   if (gOver || !gActive || showMenu) return;
-  if (gActive === 'puluc' && gPulucRoll < 0) gPulucRoll = puluc.roll();
+  if (gActive === 'puluc') {
+    if (gPulucRoll < 0) {
+      aiStickThrow(); // AI 也播放掷棍动画
+      return;
+    }
+    const move = ggAiMove();
+    if (move) {
+      ggApply(move);
+    } else {
+      // 无子可动 → 轮空
+      gPulucRoll = -1;
+      ggSwitchTurn();
+      draw();
+    }
+    return;
+  }
   const move = ggAiMove();
   if (move) {
     ggApply(move);
@@ -751,6 +854,41 @@ function ggExecAi() {
     gWinner = (gTurn === 1) ? '白方胜利！' : '黑方胜利！';
     sound.playWin();
     draw();
+  }
+}
+
+// AI 掷棍动画：木棍翻转后继续走子
+function aiStickThrow() {
+  if (gActive !== 'puluc' || gPulucRoll >= 0 || gOver) return;
+  const result = puluc.roll();
+  gPulucPhase = 'anim';
+  gStickAnim = { start: Date.now(), dur: 550, result };
+  draw();
+  const tick = () => {
+    if (!gActive || gActive !== 'puluc') return;
+    draw();
+    if (gStickAnim && Date.now() - gStickAnim.start < gStickAnim.dur) {
+      setTimeout(tick, 50);
+    } else {
+      gPulucRoll = result;
+      gPulucPhase = 'move';
+      gStickAnim = null;
+      ggExecAi(); // 动画结束，继续 AI 走子
+    }
+  };
+  setTimeout(tick, 50);
+}
+
+// 棋子移动动画 tick
+function pulucAnimTick() {
+  if (!gPulucAnim) return;
+  draw();
+  if (Date.now() - gPulucAnim.start < gPulucAnim.dur) {
+    setTimeout(pulucAnimTick, 33);
+  } else {
+    const done = gPulucAnim.onDone;
+    gPulucAnim = null;
+    if (done) done();
   }
 }
 
@@ -846,28 +984,82 @@ function onGgKoTap(r, c) {
   draw();
 }
 
-// —— 普鲁克：自动掷骰后选择移动（点格 0..4；r<0 表示点"家"区进场）——
+// —— 普鲁克：掷棍后点选棋子 → 标注可走位置 → 点落点移动（古典象棋风格）——
 function onGgPuTap(r, c) {
-  if (gOver || gThink || !gActive) return;
+  if (gOver || gThink || !gActive || gPulucAnim) return; // 动画中不可操作
   if (gSide === 2 && gTurn === puluc.PIECE.Black) return;
   if (gSide === 1 && gTurn === puluc.PIECE.White) return;
+  if (gPulucPhase === 'roll') { startStickThrow(); return; } // 点击掷棍
   if (gPulucRoll < 0) return;
-  if (r < 0) {
-    // 进场
-    const m = gMoves.find(x => x.kind === 'enter');
-    if (m) ggApply(m);
+  // 无任何合法移动 → 轮空
+  const allMoves = puluc.moves(gState, gTurn, gPulucRoll);
+  if (allMoves.length === 0) {
+    gPulucRoll = -1;
+    gPulucPhase = 'roll';
+    ggSwitchTurn();
     draw();
     return;
   }
-  const m = gMoves.find(x => x.kind === 'move' && x.pos === c);
-  if (m) {
-    const stack = gState.cells[c];
-    if (stack.length > 0 && stack[stack.length - 1].side === gTurn) {
+  // 已选中：点落点行棋（进场落点在对应格、「回家」落点在自己家区），点其它取消
+  if (gSel) {
+    const m = gMoves.find(x => {
+      if (x.kind === 'enter') {
+        if (r < 0) return false;
+        return c === puluc.enterLanding(gTurn, gPulucRoll).p;
+      }
+      const cell = gState.cells[x.pos];
+      if (!cell) return false;
+      const land = puluc.landing(x.pos, cell.dir, gPulucRoll, gTurn);
+      if (land.homeReturn) return r < 0; // 回家：点自家家区
+      if (r < 0) return false;
+      return c === land.p;
+    });
+    if (m) {
       ggApply(m);
       return;
     }
+    gSel = null;
+    gMoves = [];
+    draw();
+    return;
+  }
+  // 未选中：点自家家区 → 选中进场；点己方控制堆叠 → 选中该堆叠
+  if (r < 0) {
+    const m = allMoves.find(x => x.kind === 'enter');
+    if (m) { gSel = { kind: 'enter' }; gMoves = [m]; }
+    draw();
+    return;
+  }
+  const cell = gState.cells[c];
+  if (cell && cell.side === gTurn) {
+    const ms = allMoves.filter(x => x.kind === 'move' && x.pos === c);
+    if (ms.length > 0) { gSel = { kind: 'stack', pos: c }; gMoves = ms; }
   }
   draw();
+}
+
+// 玩家掷棍：4 根木棍翻转动画，结束后出步数
+function startStickThrow() {
+  if (gActive !== 'puluc' || gPulucPhase !== 'roll' || gPulucRoll >= 0 || gThink || gOver) return;
+  const result = puluc.roll();
+  gPulucPhase = 'anim';
+  gStickAnim = { start: Date.now(), dur: 550, result };
+  draw(); // 立即显示「掷棍中…」
+  const tick = () => {
+    if (!gActive || gActive !== 'puluc') return;
+    draw();
+    if (gStickAnim && Date.now() - gStickAnim.start < gStickAnim.dur) {
+      setTimeout(tick, 50);
+    } else {
+      gPulucRoll = result;
+      gPulucPhase = 'move';
+      gMoves = puluc.moves(gState, gTurn, gPulucRoll);
+      gStickAnim = null;
+      sound.playMove();
+      draw();
+    }
+  };
+  setTimeout(tick, 50);
 }
 
 // ================= 渲染 =================
@@ -1382,7 +1574,11 @@ function drawGG() {
   } else {
     status = (gTurn === 1 ? '黑方回合' : '白方回合');
     if (gActive === 'seega' && gState.phase === 'place') status += '（放置 ' + gState.placed[1] + '/' + gState.placed[2] + '）';
-    if (gActive === 'puluc') status += ' · 掷出 ' + gPulucRoll + ' 步';
+    if (gActive === 'puluc') {
+      if (gPulucPhase === 'roll') status += ' · 等待掷棍';
+      else if (gPulucPhase === 'anim') status += ' · 掷棍中…';
+      else status += ' · 掷出 ' + gPulucRoll + ' 步';
+    }
   }
   drawText(status, W / 2, SAFE_TOP + TITLE_H + STATUS_H / 2, statusColor, 14, 'center', 'middle');
 
@@ -1392,19 +1588,23 @@ function drawGG() {
   else if (gActive === 'konane') drawGgKonane();
   else if (gActive === 'puluc') drawGgPuluc();
 
-  // 按钮：执黑/执白 toggle（第一行）+ 重新开始/规则（第二行）
-  const y1 = gLayout.by + gLayout.size + 16;
+  // 按钮：执黑/执白 toggle（第一行）+ 重新开始/规则/日志（第二行）
+  const y1 = (gActive === 'puluc')
+    ? (gLayout.pulucY + gLayout.homeH * 2 + puluc.CELLS * gLayout.pulucRoad + 22 + 74)
+    : (gLayout.by + gLayout.size + 16);
   const y2 = y1 + BTN_H + BTN_GAP;
   const toggleW = Math.min(220, W - 32);
-  const row2W = (W - 32 - BTN_GAP) / 2;
+  const row3W = (W - 32 - BTN_GAP * 2) / 3;
   drawGgToggle((W - toggleW) / 2, y1, toggleW);
-  drawButton({ id: 'gg-restart', text: '重新开始', x: 16, y: y2, w: row2W, h: BTN_H });
-  drawButton({ id: 'gg-rules', text: '规则', x: 16 + row2W + BTN_GAP, y: y2, w: row2W, h: BTN_H });
+  drawButton({ id: 'gg-restart', text: '重新开始', x: 16, y: y2, w: row3W, h: BTN_H });
+  drawButton({ id: 'gg-rules', text: '规则', x: 16 + (row3W + BTN_GAP), y: y2, w: row3W, h: BTN_H });
+  drawButton({ id: 'gg-log', text: '日志', x: 16 + (row3W + BTN_GAP) * 2, y: y2, w: row3W, h: BTN_H });
 
   // 弹窗
   gModal = [];
   if (gOver) drawGgGameOverModal();
   else if (gShowRules) drawGgRulesModal();
+  else if (gShowLog) drawGgLogModal();
 }
 
 function drawGgPiece(cx, cy, rad, color, sel) {
@@ -1549,39 +1749,142 @@ function drawGgKonane() {
   }
 }
 
-// 普鲁克：5 格道路 + 家/离场 + 骰子
+// 普鲁克（竖版）：上下两端家区 + 中间 11 格纵向宽格 + 木棍 + 掷棍按钮
 function drawGgPuluc() {
-  const road = gLayout.road, ry = gLayout.by + gLayout.size / 2 - road / 2;
-  const rx = (W - road * 5) / 2;
-  // 道路格
-  for (let i = 0; i < 5; i++) {
-    const x = rx + i * road;
-    fillRoundRect(x + 1, ry + 1, road - 2, road - 2, 4, (i % 2 === 0) ? C.cell : '#b9884f');
-    const stack = gState.cells[i];
-    for (let j = 0; j < stack.length; j++) {
-      const pc = stack[j];
-      const px = x + road / 2, py = ry + road / 2 + (j - (stack.length - 1)) * 8;
-      if (pc.side === puluc.PIECE.Black) drawGgPiece(px, py, 10, C.attacker, false);
-      else drawGgPiece(px, py, 10, C.defender, false);
+  const road = gLayout.pulucRoad, cellW = gLayout.pulucW, homeH = gLayout.homeH;
+  const x = gLayout.pulucX, y0 = gLayout.pulucY;
+  const pieceR = Math.max(6, Math.min(road * 0.36, cellW * 0.14));
+
+  // 上家区（黑）
+  drawHomeZone(x, y0, cellW, homeH, 1, !!(gSel && gSel.kind === 'enter' && gSide === 1));
+  // 中间 11 格纵向道路（堆叠：顶部控制者 + 下方俘虏，垂直摞放边缘微覆盖）
+  for (let i = 0; i < puluc.CELLS; i++) {
+    const y = y0 + homeH + i * road;
+    fillRoundRect(x + 1, y + 1, cellW - 2, road - 2, 3, (i % 2 === 0) ? C.cell : '#b9884f');
+    // 动画中的堆叠在原位置不画（画在插值位置）
+    if (gPulucAnim && gPulucAnim.fromPos === i) continue;
+    const cell = gState.cells[i];
+    if (cell) {
+      const pieces = cell.captives.slice().concat([cell.side]); // 从左到右：俘虏 → 控制者
+      const sel = !!(gSel && gSel.kind === 'stack' && gSel.pos === i);
+      // 移动动画中，落点格的对方堆叠半透明（将被俘虏，避免重叠抽搐）
+      let alpha = 1;
+      if (gPulucAnim && gPulucAnim.toPos === i && cell.side !== gPulucAnim.side) alpha = 0.35;
+      drawStack(pieces, x + cellW / 2, y + road / 2, pieceR, sel, alpha);
     }
   }
-  // 可移动提示
-  if (gPulucRoll >= 0 && !gOver && !gThink) {
-    ctx.strokeStyle = C.gold;
-    ctx.lineWidth = 2;
+  // 移动动画中的堆叠（从起点滑到落点）
+  if (gPulucAnim) {
+    const t = Math.min((Date.now() - gPulucAnim.start) / gPulucAnim.dur, 1);
+    const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    const cy = gPulucAnim.fromY + (gPulucAnim.toY - gPulucAnim.fromY) * ease;
+    drawStack(gPulucAnim.pieces, x + cellW / 2, cy, pieceR, false);
+  }
+  // 下家区（白）
+  drawHomeZone(x, y0 + homeH + puluc.CELLS * road, cellW, homeH, 2, !!(gSel && gSel.kind === 'enter' && gSide === 2));
+
+  // 选中棋子可走的落点标注（古典象棋风格：金色圆点）
+  // 进场/普通移动 → 落点在对应格；「回家」→ 落点在自己那端的家区
+  if (gSel && gMoves.length > 0 && gPulucPhase === 'move') {
+    ctx.fillStyle = 'rgba(240, 192, 96, 0.85)';
     for (const m of gMoves) {
-      const px = (m.kind === 'enter') ? rx + road / 2 : rx + m.pos * road + road / 2;
+      let px2 = x + cellW / 2, py;
+      if (m.kind === 'enter') {
+        const p = puluc.enterLanding(gTurn, gPulucRoll).p;
+        py = y0 + homeH + p * road + road / 2;
+      } else {
+        const cell = gState.cells[m.pos];
+        if (!cell) continue;
+        const land = puluc.landing(m.pos, cell.dir, gPulucRoll, gTurn);
+        if (land.homeReturn) {
+          // 回家：落点在自己那端的家区
+          py = (gTurn === 1) ? y0 + homeH / 2 : y0 + homeH + puluc.CELLS * road + homeH / 2;
+        } else {
+          py = y0 + homeH + land.p * road + road / 2;
+        }
+      }
       ctx.beginPath();
-      ctx.arc(px, ry + road / 2, 9, 0, Math.PI * 2);
+      ctx.arc(px2, py, 7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // 4 根木棍 + 掷棍按钮/结果
+  const stickY = y0 + homeH * 2 + puluc.CELLS * road + 22;
+  drawSticks(W / 2, stickY);
+  if (gPulucPhase === 'roll' && !gOver && !gThink) {
+    const bw = 110, bh = 32;
+    fillRoundRect(W / 2 - bw / 2, stickY + 24, bw, bh, 16, '#4a2f18');
+    strokeRoundRect(W / 2 - bw / 2, stickY + 24, bw, bh, 16, C.gold, 1.5);
+    drawText('掷棍', W / 2, stickY + 24 + bh / 2, C.parchment, 15, 'center', 'middle');
+  } else if (gPulucPhase === 'anim') {
+    drawText('掷棍中…', W / 2, stickY + 40, C.gold, 14, 'center', 'middle');
+  } else if (gPulucRoll >= 0) {
+    drawText('掷出 ' + gPulucRoll + ' 步', W / 2, stickY + 40, C.gold, 14, 'center', 'middle');
+  }
+}
+
+// 堆叠渲染：左右横向排布 = 俘虏(对方色)在左 → 控制者(己方色)在右，边缘微覆盖；sel 时控制者金圈
+function drawStack(pieces, cx, cy, r, sel, alpha) {
+  if (pieces.length === 0) return;
+  if (alpha != null && alpha < 1) { ctx.save(); ctx.globalAlpha = alpha; }
+  const offset = r * 1.35;
+  const leftX = cx - (pieces.length - 1) * offset / 2;
+  for (let j = 0; j < pieces.length; j++) {
+    const px = leftX + j * offset;
+    const s = pieces[j];
+    const isLast = (j === pieces.length - 1); // 最右 = 控制者
+    if (s === puluc.PIECE.Black) drawGgPiece(px, cy, r, C.attacker, !!(sel && isLast));
+    else drawGgPiece(px, cy, r, C.defender, !!(sel && isLast));
+  }
+  if (alpha != null && alpha < 1) ctx.restore();
+}
+
+// 家区：横向 6 槽位（槽距随格宽自适应），显示在家等待的棋子（加大，槽内不重合）；sel 时金描边
+function drawHomeZone(x, y, w, h, side, sel) {
+  fillRoundRect(x + 1, y + 1, w - 2, h - 2, 6, '#6b4a2a');
+  if (sel) strokeRoundRect(x, y, w, h, 6, C.gold, 2);
+  const slots = gState.home[side];
+  const slotGap = Math.min(30, (w - 24) / 5);
+  const r = Math.min(10, slotGap * 0.35); // 在家棋子加大（不超槽距一半 → 不重合）
+  for (let i = 0; i < 6; i++) {
+    const px = x + w / 2 + (i - 2.5) * slotGap;
+    const py = y + h / 2;
+    if (i < slots) {
+      drawGgPiece(px, py, r, side === 1 ? C.attacker : C.defender, false);
+    } else {
+      ctx.beginPath();
+      ctx.arc(px, py, r, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = 1;
       ctx.stroke();
     }
   }
-  // 家区与离场
-  drawText('黑家 ' + gState.home[1] + ' · 离场 ' + gState.done[1], rx, ry - 18, C.text, 12, 'left', 'middle');
-  drawText('白家 ' + gState.home[2] + ' · 离场 ' + gState.done[2], rx + road * 5, ry - 18, C.text, 12, 'right', 'middle');
-  // 骰子
-  if (gPulucRoll >= 0) {
-    drawText('掷出 ' + gPulucRoll + ' 步', W / 2, ry + road + 22, C.gold, 15, 'center', 'middle');
+}
+
+// 4 根木棍：动画中翻转预览，结算后按步数显示标记面
+function drawSticks(cx, y) {
+  for (let i = 0; i < 4; i++) {
+    const x = cx - 54 + i * 36;
+    let angle = 0, marked = false;
+    if (gStickAnim) {
+      const t = Date.now() - gStickAnim.start;
+      angle = Math.sin(t / 45 + i * 1.7) * 1.1;
+      marked = (Math.floor(t / 90) + i) % 2 === 0;
+    } else if (gPulucRoll >= 0) {
+      marked = (i < gPulucRoll);
+    }
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    fillRoundRect(-17, -5, 34, 10, 4, '#8a6a3a');
+    if (marked) {
+      ctx.fillStyle = C.gold;
+      ctx.beginPath();
+      ctx.arc(12, 0, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   }
 }
 
@@ -1644,6 +1947,76 @@ function drawGgRulesModal() {
   fillRoundRect(btnX, btnY, btnW, btnH, 22, '#e5d0a0');
   drawText('知道了', btnX + btnW / 2, btnY + btnH / 2, C.parchmentTitle, 16, 'center', 'middle');
   gModal.push({ id: 'gg-rules-close', x: btnX, y: btnY, w: btnW, h: btnH });
+}
+
+// 行棋日志弹窗（样式同古典象棋）
+function drawGgLogModal() {
+  drawOverlay();
+  const bw = Math.min(W - 48, 340);
+  const bh = Math.min(H - 80, 520);
+  const bx = (W - bw) / 2;
+  const by = (H - bh) / 2;
+  fillRoundRect(bx, by, bw, bh, 14, C.parchment);
+  drawText('行棋记录', bx + bw / 2, by + 32, C.parchmentTitle, 20, 'center', 'middle');
+  if (gLogTip) {
+    drawText(gLogTip, bx + bw / 2, by + 50, '#c0392b', 12, 'center', 'middle');
+  }
+  const all = (gLog && gLog.length) ? gLog : ['（暂无行棋记录）'];
+  let shown = all;
+  if (all.length > 24) {
+    shown = ['…（前面省略，可复制查看完整）'].concat(all.slice(-23));
+  }
+  const font = '12px sans-serif';
+  const pad = 20;
+  const lineH = 19;
+  const maxWidth = bw - pad * 2;
+  let ty = by + 58;
+  const maxTY = by + bh - 84;
+  ctx.font = font;
+  for (const raw of shown) {
+    const lines = wrapText(raw, maxWidth, font);
+    for (const ln of lines) {
+      if (ty > maxTY) break;
+      drawText(ln, bx + pad, ty, C.parchmentText, 12, 'left', 'middle');
+      ty += lineH;
+    }
+  }
+  const gap = 10;
+  const btnH = 44;
+  const btnW = (bw - 48 - gap) / 2;
+  const btnX1 = bx + 24;
+  const btnX2 = btnX1 + btnW + gap;
+  const btnY = by + bh - btnH - 16;
+  fillRoundRect(btnX1, btnY, btnW, btnH, 22, '#e5d0a0');
+  drawText('复制日志', btnX1 + btnW / 2, btnY + btnH / 2, C.parchmentTitle, 15, 'center', 'middle');
+  fillRoundRect(btnX2, btnY, btnW, btnH, 22, '#e5d0a0');
+  drawText('关闭', btnX2 + btnW / 2, btnY + btnH / 2, C.parchmentTitle, 15, 'center', 'middle');
+  gModal.push({ id: 'gg-copy', x: btnX1, y: btnY, w: btnW, h: btnH });
+  gModal.push({ id: 'gg-log-close', x: btnX2, y: btnY, w: btnW, h: btnH });
+}
+
+// 复制日志
+function ggCopyLog() {
+  const text = (gLog && gLog.length) ? gLog.join('\n') : '（暂无行棋记录）';
+  gLogTip = '已触发复制…';
+  draw();
+  if (typeof wx.setClipboardData !== 'function') {
+    gLogTip = '当前环境不支持复制';
+    draw();
+    return;
+  }
+  wx.setClipboardData({
+    data: text,
+    success() {
+      gLogTip = '已复制到剪贴板';
+      draw();
+      wx.showToast({ title: '已复制', icon: 'success' });
+    },
+    fail() {
+      gLogTip = '复制失败（请真机重试）';
+      draw();
+    }
+  });
 }
 
 function draw() {
@@ -1876,21 +2249,37 @@ function handleTap(x, y) {
       draw();
       return;
     }
+    if (gShowLog) {
+      for (const b of gModal) {
+        if (hitTest(b, x, y)) {
+          if (b.id === 'gg-copy') ggCopyLog();
+          else if (b.id === 'gg-log-close') gShowLog = false;
+          draw();
+          return;
+        }
+      }
+      gShowLog = false; // 点遮罩关闭
+      draw();
+      return;
+    }
     // 返回菜单
     if (x >= 0 && x <= 90 && y >= SAFE_TOP && y <= SAFE_TOP + TITLE_H) { backToMenu(); return; }
     // 底部按钮
-    const gy1 = gLayout.by + gLayout.size + 16;
+    const gy1 = (gActive === 'puluc')
+      ? (gLayout.pulucY + gLayout.homeH * 2 + puluc.CELLS * gLayout.pulucRoad + 22 + 74)
+      : (gLayout.by + gLayout.size + 16);
     const gy2 = gy1 + BTN_H + BTN_GAP;
     const toggleW = Math.min(220, W - 32);
-    const row2W = (W - 32 - BTN_GAP) / 2;
+    const row3W = (W - 32 - BTN_GAP * 2) / 3;
     const tx = (W - toggleW) / 2;
     if (hitTest({ x: tx, y: gy1, w: toggleW, h: BTN_H }, x, y)) {
       gSide = (x < tx + toggleW / 2) ? 1 : 2; // 左半执黑、右半执白
       startGG();
       return;
     }
-    if (hitTest({ x: 16, y: gy2, w: row2W, h: BTN_H }, x, y)) { startGG(); return; }
-    if (hitTest({ x: 16 + row2W + BTN_GAP, y: gy2, w: row2W, h: BTN_H }, x, y)) { gShowRules = true; draw(); return; }
+    if (hitTest({ x: 16, y: gy2, w: row3W, h: BTN_H }, x, y)) { startGG(); return; }
+    if (hitTest({ x: 16 + (row3W + BTN_GAP), y: gy2, w: row3W, h: BTN_H }, x, y)) { gShowRules = true; draw(); return; }
+    if (hitTest({ x: 16 + (row3W + BTN_GAP) * 2, y: gy2, w: row3W, h: BTN_H }, x, y)) { gShowLog = true; gLogTip = ''; draw(); return; }
     // 舞棋：最近点命中
     if (gActive === 'mutorere') {
       const { cx, cy, r } = gLayout;
@@ -1908,16 +2297,30 @@ function handleTap(x, y) {
       if (best >= 0 && bestD < (r * 0.35) * (r * 0.35)) onGGTap(Math.floor(best / 3), best % 3);
       return;
     }
-    // 普鲁克：道路格 / 家区
+    // 普鲁克（竖版宽格）：掷棍按钮 / 道路格 / 自家家区
     if (gActive === 'puluc') {
-      const road = gLayout.road, ry = gLayout.by + gLayout.size / 2 - road / 2;
-      const rx = (W - road * 5) / 2;
-      if (x >= rx && x <= rx + road * 5 && y >= ry && y <= ry + road) {
-        const c = Math.floor((x - rx) / road);
-        if (c >= 0 && c < 5) onGGTap(0, c);
+      const road = gLayout.pulucRoad, cellW = gLayout.pulucW, homeH = gLayout.homeH;
+      const px = gLayout.pulucX, y0 = gLayout.pulucY;
+      const stickY = y0 + homeH * 2 + puluc.CELLS * road + 22;
+      // 掷棍按钮
+      if (gPulucPhase === 'roll' && !gThink && !gOver) {
+        if (hitTest({ x: W / 2 - 55, y: stickY + 24, w: 110, h: 32 }, x, y)) {
+          startStickThrow();
+          return;
+        }
+      }
+      // 道路格
+      if (x >= px && x <= px + cellW && y >= y0 + homeH && y <= y0 + homeH + puluc.CELLS * road) {
+        const r = Math.floor((y - (y0 + homeH)) / road);
+        if (r >= 0 && r < puluc.CELLS) onGGTap(0, r);
         return;
       }
-      if (y >= ry - 26 && y < ry) { onGGTap(-1, -1); return; } // 点家区进场
+      // 自家家区 → 进场
+      const myHomeY = (gSide === 1) ? y0 : y0 + homeH + puluc.CELLS * road;
+      if (x >= px - 6 && x <= px + cellW + 6 && y >= myHomeY - 8 && y <= myHomeY + homeH + 8) {
+        onGGTap(-1, -1);
+        return;
+      }
       return;
     }
     // 方格类：施嘉 5×5 / 跳棋 8×8

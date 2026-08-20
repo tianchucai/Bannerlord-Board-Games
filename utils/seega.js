@@ -124,38 +124,9 @@ function threatenedCount(board, side) {
   return n;
 }
 
-// AI：放置阶段占中心附近；移动阶段吃子优先、其次避被夹
-function aiMove(board, side, phase) {
-  if (phase === 'place') {
-    const list = placements(board);
-    if (list.length === 0) return null;
-    let best = null, bestD = Infinity;
-    for (const m of list) {
-      const d = Math.abs(m.place.r - 2) + Math.abs(m.place.c - 2);
-      if (d < bestD) { bestD = d; best = m; }
-    }
-    return best;
-  }
-  const list = moves(board, side);
-  if (list.length === 0) return null;
-  let best = null, bestScore = -Infinity;
-  for (const m of list) {
-    const nb = applyMove(board, m, side).board;
-    let score = 0;
-    const eaten = capturedByMove(nb, side, m.to.r, m.to.c).length;
-    score += eaten * 100;                                     // 吃子
-    score -= threatenedCount(nb, side) * 30;                  // 移动后己方受夹
-    // 移动后对方能吃多少
-    const opp = side === PIECE.Black ? PIECE.White : PIECE.Black;
-    for (const om of moves(nb, opp)) {
-      score -= capturedByMove(nb, opp, om.to.r, om.to.c).length * 40;
-    }
-    if (score > bestScore) { bestScore = score; best = m; }
-  }
-  return best;
-}
+// AI 见 seega_ai.js
 
 module.exports = {
   SIZE, PIECE, TOTAL, isCenterCross, createEmpty, setup, count,
-  placements, moves, capturedByMove, applyMove, checkWin, aiMove
+  placements, moves, capturedByMove, applyMove, checkWin, threatenedCount
 };

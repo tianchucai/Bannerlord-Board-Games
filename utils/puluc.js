@@ -1,88 +1,167 @@
-// 普鲁克（Puluc 玛雅折返戏）：纯数据规则 + 贪心 AI
-// 规则：一条 5 格的道路（格 0-4），双方各 5 枚棋子从两端出发；
-//       掷 4 根两面木棍（标记面数 0-4）决定步数；
-//       移动一枚棋子：从己方"家"进场(占格0)，或已在路的棋子沿路前进；
-//       到达格 4 后折返往回走，回到格 0 即离场(完成)；
-//       落点格若含对方棋子，对方该格最上面一枚被捕获送回其"家"；
-//       先让全部 5 枚棋子离场的一方获胜。
-// 状态：cells[i] = 该格棋子栈（元素 { side, dir }，dir: 1=前进 -1=返回）；
-//       home = {1,2} 等待进场数；done = {1,2} 已离场数
+// 普鲁克（Puluc 玛雅折返戏）：纯数据规则（对齐骑砍二酒馆版本）
+// 规则（游戏内弹窗）：
+//  掷骰：4 根双色棍，红面数=点数；0 红（全白）=5。
+//  移动：棋子向对手大本营方向前进，到达最后一格后折返向自己本垒返回。
+//  俘虏：落点有对方棋子时，对方整个堆叠被俘、叠在我方棋子下面，现在属于我方；
+//        俘虏后本回合结束，堆叠必须掉头往回走（不能再前进）。
+//  返回本垒（胜利）：堆叠准确落在自己本垒时，己方棋子回到 home 可重新使用，
+//        堆叠里的对方俘虏棋子被淘汰出局；对方无可用棋子即获胜。
+//  补充：同色棋子不能叠同一格；棋子只能前进，到敌方终点才折返；
+//        俘虏堆叠返回途中可能被对手反俘虏夺回。
+// 状态：cells[i] = null 或 { side(控制者), dir(堆叠方向), captives:[side...](下方俘虏，从早到晚) }
+//       home = {1,2} 可重新使用数；eliminated = {1,2} 被淘汰数
 
-const CELLS = 5;
+const CELLS = 11; // 道路格数（对齐骑砍二：中间 11 格）
 const PIECE = { Black: 1, White: 2 };
-const TOTAL = 5;
+const TOTAL = 6; // 双方各 6 枚棋子
 
 function createState() {
   return {
-    cells: Array.from({ length: CELLS }, () => []),
+    cells: Array(CELLS).fill(null),
     home: { 1: TOTAL, 2: TOTAL },
-    done: { 1: 0, 2: 0 }
+    eliminated: { 1: 0, 2: 0 }
   };
 }
 
-// 掷骰：4 根两面棍 → 标记面数 0-4（均匀）
+// 掷骰：4 根双色棍红面数 n(0-4)，0 红 = 5 点
 function roll() {
   let n = 0;
   for (let i = 0; i < 4; i++) if (Math.random() < 0.5) n++;
+  return n === 0 ? 5 : n;
+}
+
+function homeEndOf(side) { return side === PIECE.Black ? 0 : CELLS - 1; }
+function farEndOf(side) { return side === PIECE.Black ? CELLS - 1 : 0; }
+
+// 某方可用棋子数 = home 可重新使用 + 场上己方控制的堆叠
+function usableCount(state, side) {
+  let n = state.home[side];
+  for (let i = 0; i < CELLS; i++) {
+    if (state.cells[i] && state.cells[i].side === side) n++;
+  }
   return n;
 }
 
-// 某方所有合法移动（掷出 n 步后）：进场 或 移动棋盘上最上面的己方棋子
+// 从 pos 沿 dir 走 n 步（到敌方终点折返反射），返回落点与是否回到主本垒
+// 回家规则（飞行棋式）：本垒格是道路上的格子；返回方向「越过」本垒格时——
+//   · 剩余步数正好用完 → 回到主本垒结算；
+//   · 步数多了 → 被顶回：从家往回弹剩余步数，停在弹回处，方向恢复朝家。
+function landing(pos, dir, n, side) {
+  const homeEnd = homeEndOf(side);
+  const farEnd = farEndOf(side);
+  let p = pos, d = dir;
+  for (let i = 0; i < n; i++) {
+    p += d;
+    if (p === farEnd) {
+      d = -d; // 到敌方终点折返（剩余步数继续走）
+    } else if ((side === PIECE.Black && d === -1 && p < homeEnd) || (side === PIECE.White && d === 1 && p > homeEnd)) {
+      // 越过己方本垒格（到家边缘），此时 p = 家外位置
+      const remaining = n - (i + 1);
+      if (remaining === 0) {
+        return { p, dir: d, homeReturn: true }; // 正好到家 → 结算
+      }
+      // 步数多了 → 被顶回：从家往回弹 remaining 步（方向临时反向），弹完恢复朝家
+      d = -d;
+      for (let j = 0; j < remaining; j++) {
+        p += d;
+        if (p === farEnd) d = -d;
+      }
+      return { p, dir: -d, homeReturn: false };
+    }
+  }
+  return { p, dir: d, homeReturn: false };
+}
+
+// 从家出发进场：掷出 n 点走满 n 格（从棋盘外"家"起算，第 1 步进本垒格，遇远端折返）
+function enterLanding(side, n) {
+  const homeEnd = homeEndOf(side);
+  const farEnd = farEndOf(side);
+  const dir = (side === PIECE.Black) ? 1 : -1;
+  let p = homeEnd - dir; // 家在棋盘外一格
+  let d = dir;
+  for (let i = 0; i < n; i++) {
+    p += d;
+    if (p === farEnd) d = -d;
+  }
+  return { p, dir: d };
+}
+
+// 合法移动：进场（走满点数，落点同色不可）或 移动己方控制的堆叠（落点同色不可）
 function moves(state, side, n) {
   const list = [];
-  if (state.home[side] > 0) list.push({ kind: 'enter' });
+  if (state.home[side] > 0) {
+    const land = enterLanding(side, n);
+    const target = state.cells[land.p];
+    if (!target || target.side !== side) list.push({ kind: 'enter' });
+  }
   for (let pos = 0; pos < CELLS; pos++) {
-    const stack = state.cells[pos];
-    if (stack.length === 0) continue;
-    if (stack[stack.length - 1].side !== side) continue; // 只动己方压顶子
+    const cell = state.cells[pos];
+    if (!cell || cell.side !== side) continue;
+    const land = landing(pos, cell.dir, n, side);
+    if (land.homeReturn) { list.push({ kind: 'move', pos, n }); continue; }
+    const target = state.cells[land.p];
+    if (target && target.side === side) continue; // 同色不能叠
     list.push({ kind: 'move', pos, n });
   }
   return list;
 }
 
-// 走子，返回 { state, captured }
+// 应用移动，返回 { state, captured, ok }；非法返回 null
 function applyMove(state, move, side, n) {
+  // 深拷贝格子对象：applyMove 必须为纯函数——AI 评估会反复调用它且传入活状态，
+  // 浅拷贝会让 cell.dir/captives 的修改（俘虏翻转、并入俘虏）原地污染输入状态，
+  // 导致棋盘凭空多俘虏、AI 走子应用失败卡死。
   const st = {
-    cells: state.cells.map(stack => stack.slice()),
+    cells: state.cells.map(c => (c ? { ...c, captives: c.captives.slice() } : null)),
     home: { ...state.home },
-    done: { ...state.done }
+    eliminated: { ...state.eliminated }
   };
-  let captured = 0;
   if (move.kind === 'enter') {
+    // 从家出发，掷出 n 点走满 n 格；落点有对方堆叠则俘虏并强制返回
+    const land = enterLanding(side, n);
+    const target = st.cells[land.p];
+    if (target && target.side === side) return null; // 同色不能叠
     st.home[side]--;
-    st.cells[0].push({ side, dir: 1 });
-  } else {
-    const stack = st.cells[move.pos];
-    const piece = stack.pop();
-    let p = move.pos, dir = piece.dir;
-    let done = false;
-    for (let i = 0; i < n; i++) {
-      p += dir;
-      if (p === CELLS - 1 && dir === 1) { dir = -1; }      // 到达远端格 4 掉头
-      else if (p <= 0 && dir === -1) { done = true; break; } // 返回途中到格 0 离场
+    let captured = 0;
+    let dir = land.dir;
+    let captives = [];
+    if (target) {
+      captives = [target.side].concat(target.captives);
+      captured = 1 + target.captives.length;
+      dir = -dir; // 俘虏后强制掉头往回走
     }
-    if (done) {
-      st.done[side]++;
-    } else {
-      piece.dir = dir;
-      st.cells[p].push(piece);
-      // 捕获：落点格有对方棋子 → 最上面一枚送回其 home
-      for (let i = st.cells[p].length - 1; i >= 0; i--) {
-        if (st.cells[p][i].side !== side) {
-          const oppPiece = st.cells[p].splice(i, 1)[0];
-          st.home[oppPiece.side]++;
-          captured++;
-          break;
-        }
-      }
-    }
+    st.cells[land.p] = { side, dir, captives };
+    return { state: st, captured, ok: true };
   }
-  return { state: st, captured };
+  const cell = st.cells[move.pos];
+  if (!cell || cell.side !== side) return null;
+  const land = landing(move.pos, cell.dir, n, side);
+  if (land.homeReturn) {
+    // 堆叠准确落在本垒：己方棋子回 home 可重新使用，俘虏敌子淘汰出局
+    st.home[side] += 1;
+    for (const s of cell.captives) st.eliminated[s]++;
+    st.cells[move.pos] = null;
+    return { state: st, captured: 0, ok: true };
+  }
+  const target = st.cells[land.p];
+  st.cells[move.pos] = null;
+  if (target) {
+    if (target.side === side) return null; // 同色不能叠
+    // 俘虏整个对方堆叠：对方控制者+其俘虏全部叠到我方棋子下面，所有权归我
+    cell.captives = cell.captives.concat(target.side, target.captives);
+    cell.dir = -cell.dir; // 俘虏后强制掉头往回走（本回合移动结束）
+    st.cells[land.p] = cell;
+    return { state: st, captured: 1 + target.captives.length, ok: true };
+  }
+  cell.dir = land.dir;
+  st.cells[land.p] = cell;
+  return { state: st, captured: 0, ok: true };
 }
 
+// 胜负：某方无可用棋子（home 与场上控制堆叠均为 0）→ 对方胜
 function checkWin(state) {
-  if (state.done[PIECE.Black] >= TOTAL) return PIECE.Black;
-  if (state.done[PIECE.White] >= TOTAL) return PIECE.White;
+  if (usableCount(state, PIECE.Black) === 0) return PIECE.White;
+  if (usableCount(state, PIECE.White) === 0) return PIECE.Black;
   return null;
 }
 
@@ -90,29 +169,7 @@ function hasAnyMove(state, side, n) {
   return moves(state, side, n).length > 0;
 }
 
-// AI：掷出 n 步后，优先捕获对方子、其次推进最接近离场的子、再其次进场
-function aiMove(state, side, n) {
-  const list = moves(state, side, n);
-  if (list.length === 0) return null;
-  let best = null, bestScore = -Infinity;
-  for (const m of list) {
-    const { state: st, captured } = applyMove(state, m, side, n);
-    let score = captured * 100;
-    score += st.done[side] * 10;
-    score -= st.home[side] * 2;
-    for (let pos = 0; pos < CELLS; pos++) {
-      for (const pc of st.cells[pos]) {
-        if (pc.side !== side) continue;
-        const dist = (pc.dir === 1) ? (CELLS - 1 - pos) : pos;
-        score += (CELLS - dist) * 0.5; // 越接近折返/离场越好
-      }
-    }
-    if (score > bestScore) { bestScore = score; best = m; }
-  }
-  return best;
-}
-
 module.exports = {
   CELLS, PIECE, TOTAL, createState, roll, moves, applyMove,
-  checkWin, hasAnyMove, aiMove
+  checkWin, hasAnyMove, usableCount, landing, enterLanding
 };
