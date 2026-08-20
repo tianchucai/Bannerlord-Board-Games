@@ -258,7 +258,7 @@ let gModal = [];
 let gPulucRoll = -1;  // 普鲁克当前掷出的步数（-1 待掷）
 let gPulucPhase = 'roll'; // 'roll' 待掷 / 'anim' 掷棍动画中 / 'move' 选子移动
 let gStickAnim = null;  // 掷棍动画 { start, dur, result }
-let gPulucAnim = null;  // 棋子移动动画 { fromY, toY, pieces, side, fromPos, start, dur, onDone }
+let gPulucAnim = null;  // 棋子移动动画 { path(逐格y路径), pieces, side, fromPos, start, dur, onDone }
 let gLayout = { bx: 0, by: 0, cell: 40, r: 120, cx: 0, cy: 0, road: 44 };
 
 const RULES = [
@@ -700,6 +700,37 @@ function ggCheckWin() {
   return null;
 }
 
+// 普鲁克逐格动画路径：记录堆叠沿 dir 走 n 步经过的每个位置（含远端折返、
+// 本垒越界与「顶回」弹回），让动画格数与掷棍点数严格对应，折返/顶回可见。
+function pulucPathY(side, n, fromPos, fromDir, homeY) {
+  const road = gLayout.pulucRoad, y0 = gLayout.pulucY, homeH = gLayout.homeH;
+  const cellY = (p) => y0 + homeH + p * road + road / 2;
+  const homeEnd = (side === puluc.PIECE.Black) ? 0 : puluc.CELLS - 1;
+  const farEnd = (side === puluc.PIECE.Black) ? puluc.CELLS - 1 : 0;
+  const enter = (fromPos === null);
+  const pts = [enter ? homeY : cellY(fromPos)];
+  let p = enter ? (homeEnd - (side === puluc.PIECE.Black ? 1 : -1)) : fromPos;
+  let d = enter ? ((side === puluc.PIECE.Black) ? 1 : -1) : fromDir;
+  for (let i = 0; i < n; i++) {
+    p += d;
+    if (p === farEnd) { d = -d; pts.push(cellY(p)); continue; }
+    if ((side === puluc.PIECE.Black && d === -1 && p < homeEnd) || (side === puluc.PIECE.White && d === 1 && p > homeEnd)) {
+      const remaining = n - (i + 1);
+      if (remaining === 0) { pts.push(homeY); return pts; } // 正好到家
+      pts.push(homeY); // 顶回：先进本垒再弹回
+      d = -d;
+      for (let j = 0; j < remaining; j++) {
+        p += d;
+        if (p === farEnd) d = -d;
+        pts.push(cellY(p));
+      }
+      return pts;
+    }
+    pts.push(cellY(p));
+  }
+  return pts;
+}
+
 // 应用走法（返回 { captured }）
 function ggApply(move) {
   let captured = 0;
@@ -730,9 +761,9 @@ function ggApply(move) {
     const homeY = (gTurn === 1) ? y0 + homeH / 2 : y0 + homeH + puluc.CELLS * road + homeH / 2;
     const fromCell = (move.kind === 'enter') ? null : gState.cells[move.pos];
     const pieces = move.kind === 'enter' ? [gTurn] : (fromCell ? fromCell.captives.slice().concat([fromCell.side]) : [gTurn]);
-    let fromY = (move.kind === 'enter') ? homeY : y0 + homeH + move.pos * road + road / 2;
     const land = (move.kind === 'enter') ? puluc.enterLanding(gTurn, gPulucRoll) : puluc.landing(move.pos, fromCell.dir, gPulucRoll, gTurn);
-    const toY = land.homeReturn ? homeY : y0 + homeH + land.p * road + road / 2;
+    // 逐格动画路径（含远端折返、本垒越界顶回）——动画格数严格等于掷出的步数
+    const path = pulucPathY(gTurn, gPulucRoll, move.kind === 'enter' ? null : move.pos, move.kind === 'enter' ? 0 : fromCell.dir, homeY);
     const res = puluc.applyMove(gState, move, gTurn, gPulucRoll);
     if (!res) {
       // 防御：异常时不冻结——按本轮无子可动处理（轮空换边，解除思考锁）
@@ -756,10 +787,10 @@ function ggApply(move) {
     if (res.captured > 0) sound.playCapture();
     else sound.playMove();
     gPulucAnim = {
-      fromY, toY, pieces, side: gTurn,
+      path, pieces, side: gTurn,
       fromPos: move.kind === 'enter' ? null : move.pos,
       toPos: land.homeReturn ? null : land.p,
-      start: Date.now(), dur: 380,
+      start: Date.now(), dur: Math.max(560, (path.length - 1) * 160),
       onDone: () => {
         gState = res.state;
         gPulucRoll = -1;
@@ -873,7 +904,11 @@ function aiStickThrow() {
       gPulucRoll = result;
       gPulucPhase = 'move';
       gStickAnim = null;
-      ggExecAi(); // 动画结束，继续 AI 走子
+      draw(); // 先显示掷出的步数
+      // 停顿约 1 秒让玩家看清点数，再继续 AI 走子
+      setTimeout(() => {
+        if (gActive === 'puluc' && gPulucRoll >= 0 && gPulucPhase === 'move' && !gOver) ggExecAi();
+      }, 1000);
     }
   };
   setTimeout(tick, 50);
@@ -1773,11 +1808,16 @@ function drawGgPuluc() {
       drawStack(pieces, x + cellW / 2, y + road / 2, pieceR, sel, alpha);
     }
   }
-  // 移动动画中的堆叠（从起点滑到落点）
+  // 移动动画中的堆叠（沿逐格路径走，含折返/顶回）
   if (gPulucAnim) {
     const t = Math.min((Date.now() - gPulucAnim.start) / gPulucAnim.dur, 1);
-    const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-    const cy = gPulucAnim.fromY + (gPulucAnim.toY - gPulucAnim.fromY) * ease;
+    const pts = gPulucAnim.path;
+    const segs = pts.length - 1;
+    const st = Math.min(t * segs, segs);
+    const i = Math.floor(st);
+    const lt = st - i;
+    const ease = lt < 0.5 ? 2 * lt * lt : 1 - Math.pow(-2 * lt + 2, 2) / 2;
+    const cy = pts[i] + (pts[Math.min(i + 1, segs)] - pts[i]) * ease;
     drawStack(gPulucAnim.pieces, x + cellW / 2, cy, pieceR, false);
   }
   // 下家区（白）
