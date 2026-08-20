@@ -137,9 +137,13 @@ function applyMove(state, move, side, n) {
   if (!cell || cell.side !== side) return null;
   const land = landing(move.pos, cell.dir, n, side);
   if (land.homeReturn) {
-    // 堆叠准确落在本垒：己方棋子回 home 可重新使用，俘虏敌子淘汰出局
+    // 堆叠准确落在本垒：己方棋子（控制者 + 堆叠里同色俘虏）回 home 可重新使用，
+    // 只有对方俘虏被淘汰出局（堆叠里可能混有被反俘回来的己方棋子）
     st.home[side] += 1;
-    for (const s of cell.captives) st.eliminated[s]++;
+    for (const s of cell.captives) {
+      if (s === side) st.home[side]++;
+      else st.eliminated[s]++;
+    }
     st.cells[move.pos] = null;
     return { state: st, captured: 0, ok: true };
   }
