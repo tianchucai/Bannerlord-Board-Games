@@ -63,6 +63,8 @@ const BTN_H = 42;
 const BTN_GAP = 10;
 const BTN_AREA_H = BTN_H * 3 + BTN_GAP * 2 + 18;
 const WS_CAP_H = 30; // 狼羊棋：棋盘下方「已吃羊」指示行高度
+const MENU_CONTACT_W = 220; // 主菜单「联系客服」按钮宽
+const MENU_CONTACT_H = 42;  // 主菜单「联系客服」按钮高
 
 // ---------- 主菜单：骑砍二酒馆六种棋局 ----------
 const GAMES = [
@@ -80,6 +82,9 @@ let showMenu = true;       // 主菜单显示状态
 let menuTip = '';          // 菜单底部提示文字
 let menuTipTimer = null;   // 提示定时器
 let menuButtons = [];      // 主菜单按钮 { gameId, x, y, w, h }
+let menuContact = { x: 0, y: 0, w: 0, h: 0 }; // 主菜单「联系客服」按钮
+const WX_CS_CORP_ID = '';  // 微信客服企业 corpId（微信公众平台「微信客服」配置后填入）
+const WX_CS_URL = '';      // 微信客服会话 url（同上）
 
 const layout = {};
 function computeLayout() {
@@ -141,6 +146,13 @@ function computeMenuLayout() {
       h: btnH
     };
   });
+  // 底部「联系客服」按钮（下方留出小字与提示文字的位置）
+  menuContact = {
+    x: (W - MENU_CONTACT_W) / 2,
+    y: H - SAFE_TOP - 48 - 12 - MENU_CONTACT_H,
+    w: MENU_CONTACT_W,
+    h: MENU_CONTACT_H
+  };
 }
 
 // ---------- 固定按钮 ----------
@@ -1777,12 +1789,34 @@ function drawMainMenu() {
     drawText('（' + g.origin + '）', b.x + b.w / 2, b.y + b.h / 2 + 12, open ? '#c9a86a' : '#7a6a4a', 12, 'center', 'middle');
   }
 
+  // 联系客服按钮
+  fillRoundRect(menuContact.x, menuContact.y, menuContact.w, menuContact.h, menuContact.h / 2, '#4a2f18');
+  strokeRoundRect(menuContact.x, menuContact.y, menuContact.w, menuContact.h, menuContact.h / 2, C.gold, 1.5);
+  drawText('联系客服', W / 2, menuContact.y + menuContact.h / 2, C.parchment, 15, 'center', 'middle');
+  // 按钮下方小字：开发者身份 + 征集意见
+  drawText('开发者也是骑砍二玩家，希望大家提出意见一起维护好这个小游戏', W / 2, H - SAFE_TOP - 48, C.dim, 10, 'center', 'middle');
+
   // 底部提示
-  drawText(menuTip || '选择棋局开始游戏', W / 2, H - SAFE_TOP - 36, menuTip ? C.gold : C.dim, 13, 'center', 'middle');
+  drawText(menuTip || '选择棋局开始游戏', W / 2, H - SAFE_TOP - 30, menuTip ? C.gold : C.dim, 12, 'center', 'middle');
+}
+
+// —— 联系客服 ——
+// —— 联系客服 ——
+// 点击「联系客服」直接进入微信客服聊天框（需在微信公众平台配置微信客服并填入 corpId / 会话 url）
+function openCustomerService() {
+  if (typeof wx.openCustomerServiceChat !== 'function') {
+    wx.showToast({ title: '当前环境不支持客服', icon: 'none' });
+    return;
+  }
+  wx.openCustomerServiceChat({
+    extInfo: { url: WX_CS_URL },
+    corpId: WX_CS_CORP_ID,
+    success() {},
+    fail() { wx.showToast({ title: '客服未配置', icon: 'none' }); }
+  });
 }
 
 // ================= 狼羊棋渲染 =================
-
 function drawWolfSheep() {
   // 标题
   drawGameHeader('狼羊棋');
@@ -2821,6 +2855,11 @@ function copyLog() {
 function handleTap(x, y) {
   // 主菜单：六个棋局入口
   if (showMenu) {
+    // 联系客服按钮：直接进入微信客服聊天框
+    if (hitTest(menuContact, x, y)) {
+      openCustomerService();
+      return;
+    }
     for (const b of menuButtons) {
       if (hitTest(b, x, y)) {
         const g = GAMES[b.gameId - 1];
