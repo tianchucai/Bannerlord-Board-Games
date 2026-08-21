@@ -203,6 +203,8 @@ let wsShowRules = false;
 let wsModalButtons = []; // 狼羊棋弹窗按钮
 let wsLayout = { bx: 0, by: 0, cell: 60 };
 let wsButtons = [];      // 狼羊棋底部按钮
+let wsAnim = null;       // 狼羊棋行棋动画 { kind:'move'|'place', from, to, capture, place, piece, start, dur, onDone }
+let wsAnimFrame = null;  // 狼羊棋动画 requestAnimationFrame 句柄
 
 const WS_RULES = [
   '狼羊棋（尼泊尔虎棋 Bagh-Chal）：5×5 棋盘，狼(虎) 4 只 vs 羊 20 只。',
@@ -353,6 +355,8 @@ function backToMenu() {
   movableCells = [];
   anim = null;
   if (animFrame != null) { cancelAnimationFrame(animFrame); animFrame = null; }
+  wsAnim = null;
+  if (wsAnimFrame != null) { cancelAnimationFrame(wsAnimFrame); wsAnimFrame = null; }
   draw();
 }
 
@@ -512,6 +516,8 @@ function startWsGame() {
   wsThinking = false;
   wsMoveCount = 0;
   wsShowRules = false;
+  wsAnim = null;
+  if (wsAnimFrame != null) { cancelAnimationFrame(wsAnimFrame); wsAnimFrame = null; }
   checkWsAiTurn();
   draw();
 }
@@ -568,23 +574,61 @@ function applyWsMove(move) {
   // 音效：跳吃更脆，其余落子/放子用"嗒"
   if (res.captured > 0) sound.playCapture();
   else sound.playMove();
+  draw();
 
-  const win = wsmod.checkWin(ws.board, ws.captured);
-  if (win === 'wolf') {
-    wsGameOver = true; wsWinner = '狼方胜利！'; sound.playWin();
-  } else if (win === 'sheep') {
-    wsGameOver = true; wsWinner = '羊方胜利！'; sound.playWin();
-  } else if (wsMoveCount >= wsmod.MAX_MOVES) {
-    wsGameOver = true; wsWinner = '平局（步数上限）';
-  } else {
-    switchWsTurn();
+  // 播放行棋动画（慢速），动画结束后再判定胜负 / 切换回合
+  const onDone = () => {
+    const win = wsmod.checkWin(ws.board, ws.captured);
+    if (win === 'wolf') {
+      wsGameOver = true; wsWinner = '狼方胜利！'; sound.playWin();
+    } else if (win === 'sheep') {
+      wsGameOver = true; wsWinner = '羊方胜利！'; sound.playWin();
+    } else if (wsMoveCount >= wsmod.MAX_MOVES) {
+      wsGameOver = true; wsWinner = '平局（步数上限）';
+    } else {
+      switchWsTurn();
+    }
+    draw();
+  };
+  if (move.place) startWsPlaceAnim(move.place, onDone);
+  else startWsMoveAnim(move.from, move.to, move.capture, onDone);
+}
+
+// —— 狼羊棋行棋动画（慢速：移动 450ms、放置弹入 280ms）——
+function startWsMoveAnim(from, to, capture, onDone) {
+  wsAnim = {
+    kind: 'move',
+    from, to, capture,
+    piece: ws.turn, // 刚走的一方
+    start: Date.now(), dur: 450, onDone
+  };
+  draw();
+  if (wsAnimFrame == null) wsAnimFrame = requestAnimationFrame(wsAnimTick);
+}
+
+function startWsPlaceAnim(place, onDone) {
+  wsAnim = { kind: 'place', place, start: Date.now(), dur: 280, onDone };
+  draw();
+  if (wsAnimFrame == null) wsAnimFrame = requestAnimationFrame(wsAnimTick);
+}
+
+function wsAnimTick() {
+  wsAnimFrame = null;
+  if (!wsAnim) return;
+  if (Date.now() - wsAnim.start >= wsAnim.dur) {
+    const done = wsAnim.onDone;
+    wsAnim = null;
+    if (done) done();
+    else draw();
+    return;
   }
   draw();
+  wsAnimFrame = requestAnimationFrame(wsAnimTick);
 }
 
 // 玩家触摸狼羊棋棋盘（r, c 为 0..4 点阵坐标）
 function onWsTap(r, c) {
-  if (wsGameOver || wsThinking || !ws) return;
+  if (wsGameOver || wsThinking || wsAnim || !ws) return;
   const isWolfTurn = ws.turn === wsmod.PIECE.Wolf;
   const playerWolf = wsSide === 1;
 
@@ -1822,8 +1866,8 @@ function drawWsBoard() {
 
   if (!ws) return;
 
-  // 羊放置阶段提示（玩家执羊时显示可放点）
-  if (!wsGameOver && !wsThinking && wsSide === 2 && ws.turn === wsmod.PIECE.Sheep && ws.phase === 'place') {
+  // 羊放置阶段提示（玩家执羊时显示可放点；动画期间不显示，避免干扰）
+  if (!wsGameOver && !wsThinking && !wsAnim && wsSide === 2 && ws.turn === wsmod.PIECE.Sheep && ws.phase === 'place') {
     ctx.fillStyle = 'rgba(240, 192, 96, 0.45)';
     for (let r = 0; r < 5; r++) {
       for (let c = 0; c < 5; c++) {
@@ -1846,26 +1890,72 @@ function drawWsBoard() {
     }
   }
 
+  // 动画状态：移动中的棋子位置 / 放置中的棋子缩放 / 被跳吃的羊淡出
+  let animPos = null, animPlace = null, animEat = null;
+  if (wsAnim) {
+    const a = wsAnim;
+    const t = Math.min(1, (Date.now() - a.start) / a.dur);
+    if (a.kind === 'move') {
+      const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; // 缓入缓出
+      animPos = {
+        x: bx + (a.from.c + (a.to.c - a.from.c) * e) * cell,
+        y: by + (a.from.r + (a.to.r - a.from.r) * e) * cell,
+        piece: a.piece
+      };
+      if (a.capture) {
+        // 被跳吃的羊：在跳跃前 45% 的时间里淡出
+        const at = Math.min(1, t / 0.45);
+        animEat = { x: bx + a.capture.c * cell, y: by + a.capture.r * cell, alpha: 1 - at };
+      }
+    } else {
+      // 放置：从 0.3 倍大小弹入到完整
+      const s = 0.3 + 0.7 * (1 - Math.pow(1 - t, 3));
+      animPlace = { x: bx + a.place.c * cell, y: by + a.place.r * cell, scale: s };
+    }
+  }
+
   // 棋子：狼=深色大圆（金色眼），羊=白色小圆
   for (let r = 0; r < 5; r++) {
     for (let c = 0; c < 5; c++) {
       const p = ws.board[r][c];
       if (p === wsmod.PIECE.None) continue;
+      // 动画中的棋子不画在原位（移动中的画在插值位置、放置中的画成弹入）
+      if (wsAnim && wsAnim.kind === 'move' && r === wsAnim.to.r && c === wsAnim.to.c) continue;
+      if (wsAnim && wsAnim.kind === 'place' && r === wsAnim.place.r && c === wsAnim.place.c) continue;
       const x = bx + c * cell, y = by + r * cell;
-      if (p === wsmod.PIECE.Wolf) {
-        if (wsSelected && wsSelected.r === r && wsSelected.c === c) {
-          ctx.beginPath(); ctx.arc(x, y, cell * 0.36, 0, Math.PI * 2); ctx.fillStyle = C.gold; ctx.fill();
-        }
-        ctx.beginPath(); ctx.arc(x, y, cell * 0.30, 0, Math.PI * 2); ctx.fillStyle = C.attacker; ctx.fill();
-        ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 1; ctx.stroke();
-        ctx.fillStyle = C.gold;
-        ctx.beginPath(); ctx.arc(x - cell * 0.09, y - cell * 0.05, 2.2, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(x + cell * 0.09, y - cell * 0.05, 2.2, 0, Math.PI * 2); ctx.fill();
-      } else {
-        ctx.beginPath(); ctx.arc(x, y, cell * 0.21, 0, Math.PI * 2); ctx.fillStyle = C.defender; ctx.fill();
-        ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1; ctx.stroke();
-      }
+      const sel = !!(wsSelected && wsSelected.r === r && wsSelected.c === c);
+      drawWsPiece(x, y, p, cell, sel);
     }
+  }
+
+  // 被跳吃的羊淡出
+  if (animEat) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, animEat.alpha);
+    drawWsPiece(animEat.x, animEat.y, wsmod.PIECE.Sheep, cell, false);
+    ctx.restore();
+  }
+  // 移动中的棋子画在最上层
+  if (animPos) drawWsPiece(animPos.x, animPos.y, animPos.piece, cell, false);
+  // 放置中的棋子（弹入）
+  if (animPlace) drawWsPiece(animPlace.x, animPlace.y, wsmod.PIECE.Sheep, cell, false, animPlace.scale);
+}
+
+// 画一枚狼/羊棋子（x, y 为点阵坐标；scale 用于放置弹入动画）
+function drawWsPiece(x, y, p, cell, selected, scale) {
+  const s = (scale == null) ? 1 : scale;
+  if (p === wsmod.PIECE.Wolf) {
+    if (selected) {
+      ctx.beginPath(); ctx.arc(x, y, cell * 0.36, 0, Math.PI * 2); ctx.fillStyle = C.gold; ctx.fill();
+    }
+    ctx.beginPath(); ctx.arc(x, y, cell * 0.30 * s, 0, Math.PI * 2); ctx.fillStyle = C.attacker; ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = C.gold;
+    ctx.beginPath(); ctx.arc(x - cell * 0.09 * s, y - cell * 0.05 * s, 2.2, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x + cell * 0.09 * s, y - cell * 0.05 * s, 2.2, 0, Math.PI * 2); ctx.fill();
+  } else {
+    ctx.beginPath(); ctx.arc(x, y, cell * 0.21 * s, 0, Math.PI * 2); ctx.fillStyle = C.defender; ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1; ctx.stroke();
   }
 }
 
