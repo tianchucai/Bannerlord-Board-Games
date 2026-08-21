@@ -17,3 +17,6 @@ Thumbs.db
 
 # 微信开发者工具本地私有配置（含个人偏好，一般不提交）
 project.private.config.json
+
+# 审核截图（本地生成，不提交）
+screenshots/

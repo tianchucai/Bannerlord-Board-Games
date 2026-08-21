@@ -1491,6 +1491,15 @@ function drawText(text, x, y, color, size, align, baseline) {
   ctx.fillText(text, x, y);
 }
 
+// 备案/审核用：对局页标题 = 上方小游戏名 + 下方棋局名，
+// 保证所有截图内都能看到备案游戏名「骑砍二的小酒馆」
+const APP_NAME = '骑砍二的小酒馆';
+function drawGameHeader(gameName) {
+  drawText(APP_NAME, W / 2, SAFE_TOP + 14, C.gold, 17, 'center', 'middle');
+  drawText(gameName, W / 2, SAFE_TOP + 31, C.text, 13, 'center', 'middle');
+  drawText('‹ 菜单', 14, SAFE_TOP + 22, C.gold, 15, 'left', 'middle');
+}
+
 // 按宽度自动换行，返回行数组
 function wrapText(text, maxWidth, font) {
   ctx.font = font;
@@ -1776,8 +1785,7 @@ function drawMainMenu() {
 
 function drawWolfSheep() {
   // 标题
-  drawText('狼羊棋', W / 2, SAFE_TOP + TITLE_H / 2, C.text, 22, 'center', 'middle');
-  drawText('‹ 菜单', 14, SAFE_TOP + TITLE_H / 2, C.gold, 15, 'left', 'middle');
+  drawGameHeader('狼羊棋');
 
   // 状态行（只显示回合/阶段信息，已吃羊数在棋盘下方指示行实时显示）
   let status = '';
@@ -2025,8 +2033,7 @@ function drawWsRulesModal() {
 function drawGG() {
   const info = GG_MODS[gActive];
   // 标题
-  drawText(info.name, W / 2, SAFE_TOP + TITLE_H / 2, C.text, 22, 'center', 'middle');
-  drawText('‹ 菜单', 14, SAFE_TOP + TITLE_H / 2, C.gold, 15, 'left', 'middle');
+  drawGameHeader(info.name);
 
   // 状态行
   let status = '';
@@ -2642,8 +2649,7 @@ function draw() {
   }
 
   // 标题
-  drawText('古典象棋', W / 2, SAFE_TOP + TITLE_H / 2, C.text, 22, 'center', 'middle');
-  drawText('‹ 菜单', 14, SAFE_TOP + TITLE_H / 2, C.gold, 15, 'left', 'middle');
+  drawGameHeader('古典象棋');
 
   // 状态行
   let status = '';
