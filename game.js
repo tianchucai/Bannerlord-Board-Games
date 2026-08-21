@@ -83,8 +83,6 @@ let menuTip = '';          // 菜单底部提示文字
 let menuTipTimer = null;   // 提示定时器
 let menuButtons = [];      // 主菜单按钮 { gameId, x, y, w, h }
 let menuContact = { x: 0, y: 0, w: 0, h: 0 }; // 主菜单「联系客服」按钮
-const WX_CS_CORP_ID = '';  // 微信客服企业 corpId（微信公众平台「微信客服」配置后填入）
-const WX_CS_URL = '';      // 微信客服会话 url（同上）
 
 const layout = {};
 function computeLayout() {
@@ -1802,17 +1800,17 @@ function drawMainMenu() {
 
 // —— 联系客服 ——
 // —— 联系客服 ——
-// 点击「联系客服」直接进入微信客服聊天框（需在微信公众平台配置微信客服并填入 corpId / 会话 url）
+// 点击「联系客服」直接打开微信小游戏原生客服会话（无需参数，空对象即可调用）
 function openCustomerService() {
-  if (typeof wx.openCustomerServiceChat !== 'function') {
+  if (typeof wx.openCustomerServiceConversation !== 'function') {
     wx.showToast({ title: '当前环境不支持客服', icon: 'none' });
     return;
   }
-  wx.openCustomerServiceChat({
-    extInfo: { url: WX_CS_URL },
-    corpId: WX_CS_CORP_ID,
+  // 必须在用户点击回调内调用；接口不支持预填聊天文字，玩家需进入后手动输入
+  wx.openCustomerServiceConversation({
+    sessionFrom: 'main_menu_contact', // 透传标记，便于开发者后台识别来源
     success() {},
-    fail() { wx.showToast({ title: '客服未配置', icon: 'none' }); }
+    fail() { wx.showToast({ title: '客服打开失败', icon: 'none' }); }
   });
 }
 
